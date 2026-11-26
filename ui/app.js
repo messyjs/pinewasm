@@ -423,7 +423,11 @@ function setupSplitters() {
 async function doRun() {
   setPill('COMPILING', 'busy');
   try {
-    const res = await window.pw.run({ src: editor.value, dataSpec, inputs: lastInputs || {}, metaOverride: (typeof qtyOverride === 'number' ? { default_qty_value: qtyOverride } : null) });
+    const mp = Math.min(10, Math.max(1, parseInt($('maxPos') && $('maxPos').value, 10) || 1));
+    const mo = {};
+    if (typeof qtyOverride === 'number') mo.default_qty_value = qtyOverride;
+    if (mp > 1) mo.max_concurrent = mp;
+    const res = await window.pw.run({ src: editor.value, dataSpec, inputs: lastInputs || {}, metaOverride: Object.keys(mo).length ? mo : null });
     if (!res.ok) {
       logErrors(res);
       setPill('ERRORS', 'err');
@@ -466,6 +470,7 @@ function renderStats(res) {
     ['TRADES', s.trades ?? 0, ''],
     ['WIN', ((s.winRate ?? 0) * 100).toFixed(0) + '%', 'acc'],
     ['RUN', (res.runMs ?? 0) + 'ms', ''],
+    ['SLOTS', (s.slotsMax ?? 1) + (s.rejected > 0 ? ' -' + s.rejected + ' REJ' : ''), ''],
     ['WASM', res.meta && res.meta.isStrategy ? 'STRAT' : 'IND', 'acc'],
   ];
   $('stats').innerHTML = cells.map(([l, v, c]) =>
@@ -593,6 +598,7 @@ function chatMsg(role, text, withApply, applyKind) {
       } else {
         lastInputs = Object.assign({}, pendingApply.inputs);
         qtyOverride = typeof pendingApply.qty === 'number' ? pendingApply.qty : null;
+        if (typeof pendingApply.maxpos === 'number' && $('maxPos')) $('maxPos').value = pendingApply.maxpos;
         const kv = Object.entries(lastInputs).map(([k2, v]) => k2 + '=' + v).join(', ');
         chatMsg('you', 'applied ' + (kv ? kv : 'signal inputs unchanged') + (qtyOverride != null ? ' | sizing ' + qtyOverride + '%' : ''));
         showPage('compiler');
@@ -626,11 +632,12 @@ document.querySelectorAll('.chip').forEach(c => { c.onclick = () => quantSend(c.
 
 /* ---------- LUX engine cross-check ---------- */
 async function luxCrossCheck() {
-  if (!lastRes) { chatMsg('quant', 'run a backtest first (no data loaded).'); return; }
+  if (!lastRes || !lastRes.t || !lastRes.c) { chatMsg('quant', 'run a backtest first (no data loaded).'); return; }
   setPill('LUX ENGINE RUNNING', 'busy');
   switchTab('quant');
-  const rep = await window.pw.luxRun({ src: editor.value,
-    data: { t: lastRes.t, o: lastRes.o, h: lastRes.h, l: lastRes.l, c: lastRes.c, v: lastRes.v } });
+  // luxRun wants rows[{t,o,h,l,c,v}]; lastRes carries columnar arrays from pw.run
+  const rows = lastRes.t.map((tv, i) => ({ t: tv, o: lastRes.o[i], h: lastRes.h[i], l: lastRes.l[i], c: lastRes.c[i], v: 0 }));
+  const rep = await window.pw.luxRun({ src: editor.value, data: rows });
   if (!rep.ok) {
     chatMsg('quant', 'LUX cross-check could not run this script: ' + (rep.error || 'unknown'));
     setPill('LUX CHECK FAILED', 'err');
@@ -645,6 +652,8 @@ async function luxCrossCheck() {
     cmp('trades', String(mine.trades), String(m.n)) + '\n' +
     cmp('win rate', (mine.winRate * 100).toFixed(1) + '%', m.winRate == null ? '-' : Number(m.winRate).toFixed(1) + '%') + '\n' +
     cmp('profit factor', Number.isFinite(mine.profitFactor) ? mine.profitFactor.toFixed(2) : 'inf', String(m.pf)) + '\n\n' +
+    'DD CAVEAT: lux m.ddPct = maxDrawdown/capital is positional/per-trade, not the equity-ledger DD -' +
+    ' expect it to read much smaller than pinewasm (bar-by-bar peak-trough). Compare trade counts + net, not DD.\n\n' +
     (agree
       ? 'Trade counts agree within tolerance - the pinewasm numbers are confirmed by LuxAlgo\'s own broker simulation.'
       : 'TRADE COUNT DIVERGES - the two engines interpreted something differently (fills, session rules, or unsupported builtins silently mapped). Inspect before trusting either.');

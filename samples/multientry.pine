@@ -1,0 +1,28 @@
+//@version=6
+strategy("Multi Entry [PineWASM]", overlay=true,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05)
+
+len = input.int(14, "RSI Length")
+rsi = ta.rsi(close, len)
+
+c1 = rsi < 40
+c2 = rsi < 30
+c3 = rsi > 70
+
+if c1
+    strategy.entry("L1", strategy.long)
+if c2
+    strategy.entry("L2", strategy.long)
+if c3
+    strategy.entry("S1", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("X1", "L1", stop=close * 0.97, limit=close * 1.06)
+    strategy.exit("X2", "L2", stop=close * 0.96, limit=close * 1.07)
+if strategy.position_size < 0
+    strategy.exit("XS", "S1", stop=close * 1.03, limit=close * 0.94)
+
+plot(rsi, "RSI", color=color.gray)

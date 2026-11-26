@@ -169,67 +169,89 @@ class Broker:
         self.O, self.H, self.L, self.C, self.T = O, H, L, C, T
         self.meta = meta
         self.capital = float(cfg.get('capital', meta.get('capital', 100000)))
+        self.max_sim = max(1, int(cfg.get('max_concurrent', meta.get('max_concurrent', 1)) or 1))
         self.cash = self.capital
-        self.qty = 0.0
-        self.avg = NAN
-        self.entry_sid = -1
         self.pend_mkt = []
         self.pend_close = []
         self.exits = {}
         self.equity = []
         self.trades = []
-        self.open_trade = None
         self.events = []
         self.pyramiding = meta.get('pyramiding', 0)
+        self.slots = []   # independent positions: dict(sid, dir, qty, avg, entry_bar, open_trade)
+        self.rejected = 0
+        # net-position view (kept fresh)
+        self.qty = 0.0
+        self.avg = NAN
+        self.entry_sid = -1
+
+    def _refresh(self):
+        nq = sum(s['qty'] for s in self.slots)
+        self.qty = nq
+        if nq != 0:
+            num = sum(s['qty'] * s['avg'] for s in self.slots)
+            self.avg = num / nq
+            self.entry_sid = self.slots[0]['sid']
+        else:
+            self.avg = NAN
+            self.entry_sid = -1
+
+    def _eq(self, pxl):
+        return self.cash + self.qty * pxl
 
     def _commission(self, notional):
         cv = self.meta.get('commission_value', 0.0)
         c = cv if self.meta.get('commission_type') == 1 else notional * cv / 100.0
         self.cash -= c
 
-    def _close(self, pxl, bar, reason):
-        if self.qty == 0: return
-        d = 1 if self.qty > 0 else -1
-        q = abs(self.qty)
-        pnl = d * (pxl - self.avg) * q
+    def _close_slot(self, slot, pxl, bar, reason):
+        d = 1 if slot['qty'] > 0 else -1
+        q = abs(slot['qty'])
+        pnl = d * (pxl - slot['avg']) * q
         self._commission(abs(q * pxl))
-        if self.open_trade:
-            ex = self.exits.get(self.entry_sid) or {'stop': NAN, 'limit': NAN}
-            self.open_trade.update(exitBar=bar, exitPx=pxl, exitTime=self.T[bar], pnl=pnl, reason=reason,
-                                   sl=ex['stop'], tp=ex['limit'])
-            ot = self.open_trade
+        ot = slot.get('open_trade')
+        if ot is not None:
+            ex = self.exits.get(slot['sid']) or {'stop': NAN, 'limit': NAN}
+            ot.update(exitBar=bar, exitPx=pxl, exitTime=self.T[bar], pnl=pnl, reason=reason,
+                      sl=ex['stop'], tp=ex['limit'])
             ot['durationBars'] = bar - ot['entryBar'] + 1
             ot['durationMs'] = (self.T[bar] - ot['entryTime']) * 1000.0
             eq_base = ot['entry_eq'] if ot.get('entry_eq') and ot['entry_eq'] > 0 else self.capital
             ot['pnlPct'] = pnl / eq_base * 100.0
             ot['maePct'] = ot.get('mae', 0.0) / eq_base * 100.0
             ot['mfePct'] = ot.get('mfe', 0.0) / eq_base * 100.0
-            self.trades.append(self.open_trade)
-            self.open_trade = None
+            self.trades.append(ot)
+            slot['open_trade'] = None
         self.cash += pnl
-        self.qty = 0.0
-        self.avg = NAN
-        self.entry_sid = -1
+        if slot in self.slots: self.slots.remove(slot)
+        self._refresh()
+
+    def _close_all(self, pxl, bar, reason):
+        for s in list(self.slots):
+            self._close_slot(s, pxl, bar, reason)
 
     def _size(self, pxl):
         val = float(self.meta.get('default_qty_value', 10))
         if self.meta.get('default_qty_type') == 1:
             return abs(val)
-        eq = self.cash + self.qty * pxl
+        eq = self._eq(pxl)
         return (eq * val / 100.0) / pxl
 
     def _open(self, d, pxl, bar, sid, qty=None):
         q = qty if qty is not None else self._size(pxl)
         if not (q > 0): return
         self._commission(abs(q * pxl))
-        self.qty = d * q
-        self.avg = pxl
-        self.entry_sid = sid
-        entry_eq = self.cash + self.qty * pxl  # equity at entry (after entry commission)
-        self.open_trade = dict(dir=d, entryBar=bar, entryTime=self.T[bar], entryPx=pxl, qty=q, sid=sid,
-                               entry_eq=entry_eq, eqPct=q * pxl / (entry_eq if entry_eq > 0 else 1.0) * 100.0,
-                               mae=0.0, mfe=0.0, maeBar=-1, mfeBar=-1)
+        dd = 1 if d > 0 else -1
+        slot = dict(sid=sid, dir=dd, qty=dd * q, avg=pxl, entry_bar=bar, open_trade=None)
+        self.slots.append(slot)
+        ot = dict(dir=dd, entryBar=bar, entryTime=self.T[bar], entryPx=pxl, qty=q, sid=sid,
+                  mae=0.0, mfe=0.0, maeBar=-1, mfeBar=-1)
+        slot['open_trade'] = ot
+        entry_eq = self._eq(pxl)  # equity at entry (after entry commission, all slots at close)
+        ot['entry_eq'] = entry_eq
+        ot['eqPct'] = q * pxl / (entry_eq if entry_eq > 0 else 1.0) * 100.0
         self.exits[sid] = {'stop': NAN, 'limit': NAN}
+        self._refresh()
 
     def entry(self, bar, sid, d, qty=None):
         self.pend_mkt.append((bar, sid, 1 if d > 0 else -1, qty))
@@ -250,59 +272,70 @@ class Broker:
         closes = [x for x in self.pend_close if x[0] < bar]
         self.pend_close = [x for x in self.pend_close if x[0] >= bar]
         for (b0, s0) in closes:
-            if s0 == -2 or (self.qty != 0 and self.entry_sid == s0):
-                self._close(oo, bar, 'close')
-                self.events.append(dict(bar=bar, type='close', px=oo))
-        for (b0, s0, d, q) in fills:
-            if d > 0:
-                if self.qty < 0: self._close(oo, bar, 'reverse')
-                if self.qty > 0 and self.entry_sid == s0: continue
-                if self.qty == 0:
-                    self._open(1, oo, bar, s0, q)
-                    self.events.append(dict(bar=bar, type='long', px=oo, qty=q))
+            if s0 == -2:
+                if self.slots:
+                    self._close_all(oo, bar, 'close')
+                    self.events.append(dict(bar=bar, type='close', px=oo))
             else:
-                if self.qty > 0: self._close(oo, bar, 'reverse')
-                if self.qty < 0 and self.entry_sid == s0: continue
-                if self.qty == 0:
-                    self._open(-1, oo, bar, s0, q)
-                    self.events.append(dict(bar=bar, type='short', px=oo, qty=q))
-        if self.qty != 0:
-            ex = self.exits.get(self.entry_sid)
-            if ex:
-                d = 1 if self.qty > 0 else -1
-                sp, lp = ex['stop'], ex['limit']
-                if d > 0:
-                    if (not isnan(sp)) and ll <= sp:
-                        pxl = min(oo, sp); self._close(pxl, bar, 'stop')
-                        self.events.append(dict(bar=bar, type='stop', px=pxl))
-                    elif (not isnan(lp)) and hh >= lp:
-                        pxl = max(oo, lp); self._close(pxl, bar, 'limit')
-                        self.events.append(dict(bar=bar, type='limit', px=pxl))
-                else:
-                    if (not isnan(sp)) and hh >= sp:
-                        pxl = max(oo, sp); self._close(pxl, bar, 'stop')
-                        self.events.append(dict(bar=bar, type='stop', px=pxl))
-                    elif (not isnan(lp)) and ll <= lp:
-                        pxl = min(oo, lp); self._close(pxl, bar, 'limit')
-                        self.events.append(dict(bar=bar, type='limit', px=pxl))
+                s = next((x for x in self.slots if x['sid'] == s0), None)
+                if s is not None:
+                    self._close_slot(s, oo, bar, 'close')
+                    self.events.append(dict(bar=bar, type='close', px=oo))
+        for (b0, s0, d, q) in fills:
+            dd = 1 if d > 0 else -1
+            same = next((x for x in self.slots if x['sid'] == s0), None)
+            if same is not None:
+                if same['dir'] == dd: continue  # already in via this entry
+                self._close_slot(same, oo, bar, 'reverse')  # flip this entry
+            else:
+                # netting guard: opposite-direction entry closes those slots first
+                for s in list(self.slots):
+                    if s['dir'] != dd:
+                        self._close_slot(s, oo, bar, 'reverse')
+            if len(self.slots) >= self.max_sim:
+                self.rejected += 1
+                continue
+            self._open(dd, oo, bar, s0, q)
+            self.events.append(dict(bar=bar, type='long' if dd > 0 else 'short', px=oo, qty=q))
+        for s in list(self.slots):
+            ex = self.exits.get(s['sid'])
+            if not ex: continue
+            d = s['dir']
+            sp, lp = ex['stop'], ex['limit']
+            if d > 0:
+                if (not isnan(sp)) and ll <= sp:
+                    pxl = min(oo, sp); self._close_slot(s, pxl, bar, 'stop')
+                    self.events.append(dict(bar=bar, type='stop', px=pxl))
+                elif (not isnan(lp)) and hh >= lp:
+                    pxl = max(oo, lp); self._close_slot(s, pxl, bar, 'limit')
+                    self.events.append(dict(bar=bar, type='limit', px=pxl))
+            else:
+                if (not isnan(sp)) and hh >= sp:
+                    pxl = max(oo, sp); self._close_slot(s, pxl, bar, 'stop')
+                    self.events.append(dict(bar=bar, type='stop', px=pxl))
+                elif (not isnan(lp)) and ll <= lp:
+                    pxl = min(oo, lp); self._close_slot(s, pxl, bar, 'limit')
+                    self.events.append(dict(bar=bar, type='limit', px=pxl))
 
     def mark(self, bar):
-        self.equity.append(self.cash + self.qty * self.C[bar])
-        ot = self.open_trade
-        if self.qty != 0 and ot is not None:
-            d = 1 if self.qty > 0 else -1
-            q = abs(self.qty)
+        mkt = sum(s['qty'] * self.C[bar] for s in self.slots)
+        self.equity.append(self.cash + mkt)
+        for s in self.slots:
+            ot = s.get('open_trade')
+            if ot is None: continue
+            d = s['dir']
+            q = abs(s['qty'])
             worst_px = self.L[bar] if d > 0 else self.H[bar]
             best_px = self.H[bar] if d > 0 else self.L[bar]
-            adv = d * (worst_px - self.avg) * q
-            fav = d * (best_px - self.avg) * q
+            adv = d * (worst_px - s['avg']) * q
+            fav = d * (best_px - s['avg']) * q
             if adv < ot.get('mae', 0.0): ot['mae'] = adv; ot['maeBar'] = bar; ot['maeTime'] = self.T[bar]
             if fav > ot.get('mfe', 0.0): ot['mfe'] = fav; ot['mfeBar'] = bar; ot['mfeTime'] = self.T[bar]
 
     def finish(self):
         last = len(self.C) - 1
-        if self.qty != 0:
-            self._close(self.C[last], last, 'end')
+        if self.slots:
+            self._close_all(self.C[last], last, 'end')
             self.events.append(dict(bar=last, type='end', px=self.C[last]))
         return self
 
@@ -822,8 +855,10 @@ def main():
     ap.add_argument('--live', action='store_true', help='poll last closed candle and fire signals')
     ap.add_argument('--interval', type=int, default=30, help='live poll seconds')
     ap.add_argument('--trades-csv', help='write trades csv')
+    ap.add_argument('--maxpos', type=int, default=None, help='max concurrent positions (slots)')
     a = ap.parse_args()
     cfg = dict(CONFIG_DEFAULTS)
+    if a.maxpos: cfg['max_concurrent'] = int(a.maxpos)
     webhook_url = (cfg.get('webhook_url') or '').strip()
     if a.csv: data = load_csv(a.csv)
     elif a.okx: data = fetch_okx(a.okx, a.tf, a.limit)

@@ -109,16 +109,31 @@ function makeTa(mem, states) {
 /* ---------- broker (typed-array data: {t,o,h,l,c,v} Float64Arrays) ---------- */
 function makeBroker(meta, data) {
   const cap = meta.capital || 100000;
-  const px = { t: data.t, o: data.o, h: data.h, l: data.l, c: data.c };
-  const at = (arr, bar) => arr[bar];
+  const maxSim = Math.max(1, Math.floor(Number(meta.max_concurrent) || 1));
   const b = {
-    cash: cap, qty: 0, avgPx: NaN, entrySid: -1, entryBar: -1,
-    pendMarket: [], pendClose: [], exits: new Map(),
-    equity: [], trades: [], o: null, commissions: 0,
-    pyramiding: meta.pyramiding || 0,
+    cash: cap, pendMarket: [], pendClose: [], exits: new Map(),
+    equity: [], trades: [], commissions: 0,
+    pyramiding: meta.pyramiding || 0, maxSim, rejected: 0,
+    slots: [], // independent positions: {sid, dir, qty, avgPx, entryBar, o}
+    // net-position compat view (kept fresh after every mutation)
+    qty: 0, avgPx: NaN, entrySid: -1, entryBar: -1,
   };
+  const netQty = () => b.slots.reduce((a, s) => a + s.qty, 0);
+  const refresh = () => {
+    const nq = netQty();
+    b.qty = nq;
+    if (nq !== 0) {
+      let num = 0;
+      for (const s of b.slots) num += s.qty * s.avgPx;
+      b.avgPx = num / nq;
+      b.entrySid = b.slots[0].sid; b.entryBar = b.slots[0].entryBar;
+    } else {
+      b.avgPx = NaN; b.entrySid = -1; b.entryBar = -1;
+    }
+  };
+  const eqAt = (px) => b.cash + netQty() * px;
   const sizeQty = (dir, px, bar) => {
-    const eq = b.cash + b.qty * px;
+    const eq = eqAt(px);
     const val = meta.default_qty_value || 10;
     if (meta.default_qty_type === 1) return Math.abs(val);
     return (eq * val / 100) / px; // percent of equity
@@ -128,39 +143,46 @@ function makeBroker(meta, data) {
     const c = meta.commission_type === 1 ? cv : notional * cv / 100;
     b.cash -= c; b.commissions += c;
   };
-  const closePos = (pxl, bar, reason) => {
-    if (b.qty === 0) return;
-    const dir = Math.sign(b.qty);
-    const q = Math.abs(b.qty);
-    const pnl = dir * (pxl - b.avgPx) * q;
+  const closeSlot = (slot, pxl, bar, reason) => {
+    const i = b.slots.indexOf(slot); if (i < 0) return;
+    const dir = Math.sign(slot.qty);
+    const q = Math.abs(slot.qty);
+    const pnl = dir * (pxl - slot.avgPx) * q;
     commission(Math.abs(q * pxl));
-    if (b.o) {
-      const ex = b.exits.get(b.entrySid);
-      b.o.exitBar = bar; b.o.exitPx = pxl; b.o.exitTime = data.t[bar];
-      b.o.pnl = pnl; b.o.reason = reason;
-      b.o.sl = ex && ex.stop === ex.stop ? ex.stop : NaN;    // stop = stop loss
-      b.o.tp = ex && ex.limit === ex.limit ? ex.limit : NaN; // limit = take profit
+    const o = slot.o;
+    if (o) {
+      const ex = b.exits.get(slot.sid);
+      o.exitBar = bar; o.exitPx = pxl; o.exitTime = data.t[bar];
+      o.pnl = pnl; o.reason = reason;
+      o.sl = ex && ex.stop === ex.stop ? ex.stop : NaN;    // stop = stop loss
+      o.tp = ex && ex.limit === ex.limit ? ex.limit : NaN; // limit = take profit
       // enrichment: duration + MaE/MFe as % of entry equity; pnl% also vs entry equity
-      b.o.durationBars = bar - b.o.entryBar + 1;
-      b.o.durationMs = (data.t[bar] - b.o.entryTime) * 1000;
-      const eqBase = (b.o.entryEq === b.o.entryEq && b.o.entryEq > 0) ? b.o.entryEq : cap;
-      b.o.pnlPct = pnl / eqBase * 100;
-      b.o.maePct = b.o.mae / eqBase * 100;
-      b.o.mfePct = b.o.mfe / eqBase * 100;
-      b.trades.push(b.o); b.o = null;
+      o.durationBars = bar - o.entryBar + 1;
+      o.durationMs = (data.t[bar] - o.entryTime) * 1000;
+      const eqBase = (o.entryEq === o.entryEq && o.entryEq > 0) ? o.entryEq : cap;
+      o.pnlPct = pnl / eqBase * 100;
+      o.maePct = o.mae / eqBase * 100;
+      o.mfePct = o.mfe / eqBase * 100;
+      b.trades.push(o); slot.o = null;
     }
-    b.cash += pnl; b.qty = 0; b.avgPx = NaN; b.entrySid = -1;
+    b.cash += pnl;
+    b.slots.splice(i, 1);
+    refresh();
   };
-  const openPos = (dir, pxl, bar, sid, qtyOverride) => {
+  const closeAll = (pxl, bar, reason) => { for (const s of [...b.slots]) closeSlot(s, pxl, bar, reason); };
+  const openSlot = (dir, pxl, bar, sid, qtyOverride) => {
     const q = qtyOverride !== undefined ? qtyOverride : sizeQty(dir, pxl, bar);
     if (!(q > 0)) return;
     commission(Math.abs(q * pxl));
-    b.qty = dir * q; b.avgPx = pxl; b.entrySid = sid; b.entryBar = bar;
-    const entryEq = b.cash + b.qty * pxl; // equity at entry (after entry commission)
-    b.o = { dir, entryBar: bar, entryTime: data.t[bar], entryPx: pxl, qty: q, sid,
-      entryEq, eqPct: q * pxl / (entryEq > 0 ? entryEq : 1) * 100,
+    const slot = { sid, dir: dir > 0 ? 1 : -1, qty: (dir > 0 ? 1 : -1) * q, avgPx: pxl, entryBar: bar, o: null };
+    b.slots.push(slot);
+    slot.o = { dir: slot.dir, entryBar: bar, entryTime: data.t[bar], entryPx: pxl, qty: q, sid,
       mae: 0, mfe: 0, maeBar: -1, mfeBar: -1 };
+    const entryEq = eqAt(pxl); // equity at entry (after entry commission, all slots at close)
+    slot.o.entryEq = entryEq;
+    slot.o.eqPct = q * pxl / (entryEq > 0 ? entryEq : 1) * 100;
     b.exits.set(sid, { stop: NaN, limit: NaN });
+    refresh();
   };
   return {
     state: b,
@@ -176,53 +198,53 @@ function makeBroker(meta, data) {
       const fills = b.pendMarket.filter(x => x.bar < bar); b.pendMarket = b.pendMarket.filter(x => x.bar >= bar);
       const closes = b.pendClose.filter(x => x.bar < bar); b.pendClose = b.pendClose.filter(x => x.bar >= bar);
       for (const c of closes) {
-        if (c.sid === -2) closePos(oo, bar, 'close');
-        else if (b.qty !== 0 && b.entrySid === c.sid) closePos(oo, bar, 'close');
+        if (c.sid === -2) closeAll(oo, bar, 'close');
+        else { const s = b.slots.find(x => x.sid === c.sid); if (s) closeSlot(s, oo, bar, 'close'); }
       }
       for (const f of fills) {
-        if (f.dir > 0) {
-          if (b.qty < 0) closePos(oo, bar, 'reverse');
-          if (b.qty > 0 && b.entrySid === f.sid) continue; // already in
-          if (b.qty === 0) openPos(1, oo, bar, f.sid, f.qty);
+        const same = b.slots.find(x => x.sid === f.sid);
+        if (same) {
+          if (same.dir === f.dir) continue; // already in via this entry
+          closeSlot(same, oo, bar, 'reverse'); // flip this entry
         } else {
-          if (b.qty > 0) closePos(oo, bar, 'reverse');
-          if (b.qty < 0 && b.entrySid === f.sid) continue;
-          if (b.qty === 0) openPos(-1, oo, bar, f.sid, f.qty);
+          // netting guard: opposite-direction entry closes those slots first
+          for (const s of [...b.slots]) if (s.dir !== f.dir) closeSlot(s, oo, bar, 'reverse');
         }
+        if (b.slots.length >= maxSim) { b.rejected++; continue; }
+        openSlot(f.dir, oo, bar, f.sid, f.qty);
       }
-      // 2) intrabar exits
-      if (b.qty !== 0) {
-        const ex = b.exits.get(b.entrySid);
-        if (process.env.PW_DEBUG && bar > 230 && bar < 250) console.error('DBG check bar=' + bar + ' entrySid=' + b.entrySid + ' stop=' + (ex && ex.stop) + ' limit=' + (ex && ex.limit) + ' H=' + data.h[bar].toFixed(2) + ' L=' + data.l[bar].toFixed(2));
-        if (ex) {
-          const dir = Math.sign(b.qty);
-          if (dir > 0) {
-            if (ex.stop === ex.stop && ll <= ex.stop) closePos(Math.min(oo, ex.stop), bar, 'stop');
-            else if (ex.limit === ex.limit && hh >= ex.limit) closePos(Math.max(oo, ex.limit), bar, 'limit');
-          } else {
-            if (ex.stop === ex.stop && hh >= ex.stop) closePos(Math.max(oo, ex.stop), bar, 'stop');
-            else if (ex.limit === ex.limit && ll <= ex.limit) closePos(Math.min(oo, ex.limit), bar, 'limit');
-          }
+      // 2) intrabar exits (per slot; stop checked before limit)
+      for (const s of [...b.slots]) {
+        const ex = b.exits.get(s.sid);
+        if (!ex) continue;
+        if (s.dir > 0) {
+          if (ex.stop === ex.stop && ll <= ex.stop) closeSlot(s, Math.min(oo, ex.stop), bar, 'stop');
+          else if (ex.limit === ex.limit && hh >= ex.limit) closeSlot(s, Math.max(oo, ex.limit), bar, 'limit');
+        } else {
+          if (ex.stop === ex.stop && hh >= ex.stop) closeSlot(s, Math.max(oo, ex.stop), bar, 'stop');
+          else if (ex.limit === ex.limit && ll <= ex.limit) closeSlot(s, Math.min(oo, ex.limit), bar, 'limit');
         }
       }
     },
     mark: (bar) => {
-      b.equity.push(b.cash + b.qty * data.c[bar]);
-      // per-trade excursion while position is open (bar ranges)
-      if (b.qty !== 0 && b.o) {
-        const dir = Math.sign(b.qty), q = Math.abs(b.qty);
-        // position closed intrabar in step leaves qty 0 -> mark skips that (partial) bar
-        const worstPx = dir > 0 ? data.l[bar] : data.h[bar];
-        const bestPx = dir > 0 ? data.h[bar] : data.l[bar];
-        const adv = dir * (worstPx - b.avgPx) * q;
-        const fav = dir * (bestPx - b.avgPx) * q;
-        if (adv < b.o.mae) { b.o.mae = adv; b.o.maeBar = bar; b.o.maeTime = data.t[bar]; }
-        if (fav > b.o.mfe) { b.o.mfe = fav; b.o.mfeBar = bar; b.o.mfeTime = data.t[bar]; }
+      let mkt = 0;
+      for (const s of b.slots) mkt += s.qty * data.c[bar];
+      b.equity.push(b.cash + mkt);
+      // per-trade excursion while slot is open (bar ranges)
+      for (const s of b.slots) {
+        const o = s.o; if (!o) continue;
+        const q = Math.abs(s.qty);
+        const worstPx = s.dir > 0 ? data.l[bar] : data.h[bar];
+        const bestPx = s.dir > 0 ? data.h[bar] : data.l[bar];
+        const adv = s.dir * (worstPx - s.avgPx) * q;
+        const fav = s.dir * (bestPx - s.avgPx) * q;
+        if (adv < o.mae) { o.mae = adv; o.maeBar = bar; o.maeTime = data.t[bar]; }
+        if (fav > o.mfe) { o.mfe = fav; o.mfeBar = bar; o.mfeTime = data.t[bar]; }
       }
     },
     finish: () => {
       const last = data.c.length - 1;
-      if (b.qty !== 0) closePos(data.c[last], last, 'end');
+      closeAll(data.c[last], last, 'end');
       return b;
     },
   };
@@ -249,6 +271,8 @@ function computeStats(b, cap) {
     maxDDPct: maxDD * 100,
     avgTrade: trades.length ? net / trades.length : 0,
     commissions: b.commissions,
+    slotsMax: b.maxSim || 1,
+    rejected: b.rejected || 0,
   };
 }
 

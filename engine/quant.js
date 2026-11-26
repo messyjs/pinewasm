@@ -43,7 +43,7 @@ function clampParam(inp, v) {
 /* ---------------- goal parsing ---------------- */
 function parseGoal(text) {
   const t = String(text || '').toLowerCase();
-  const g = { ddMax: null, minTrades: null, minWr: null, minPf: null, minNet: null, fixedQty: null, primary: null, intent: 'goal' };
+  const g = { ddMax: null, minTrades: null, minWr: null, minPf: null, minNet: null, fixedQty: null, maxPos: null, primary: null, intent: 'goal' };
   const first = (re) => { const m = t.match(re); return m ? parseFloat(m[1]) : null; };
   if (/(draw\s*down|drawdown|\bdd\b)/.test(t)) {
     g.ddMax = first(/(?:draw\s*down|drawdown|\bdd\b)\D{0,15}?(\d+(?:\.\d+)?)/);
@@ -56,17 +56,19 @@ function parseGoal(text) {
   g.minNet = first(/(?:net(?:\s?profit)?|return|profit)\D{0,15}?(\d+(?:\.\d+)?)\s*(?:%|percent)/);
   const qt = t.match(/(?:position\s*size|sizing|qty|size)\D{0,12}?(\d+(?:\.\d+)?)\s*(?:%|percent)/);
   if (qt) g.fixedQty = Math.min(100, parseFloat(qt[1]));
+  const pm = t.match(/(\d+)\s*(?:concurrent|positions\b|pos\b|slots\b)/) || t.match(/(?:concurrent|positions\b|maxpos|max\s*pos)\D{0,8}?(\d+)/);
+  if (pm) g.maxPos = Math.min(10, Math.max(1, parseInt(pm[1], 10)));
   if (/(higher|maximi[sz]e|more|best)\s*(net|profit|return)/.test(t) || /max profit/.test(t)) g.primary = 'net';
   if (!/\d/.test(t) && /(help|what can|how do|hello|hi\b|hey\b)/.test(t)) g.intent = 'help';
   if (!/\d/.test(t) && /(stats|baseline|current|performance|how is it|explain)/.test(t)) g.intent = 'stats';
   // LLM loop mode: source-rewriting agent loop (Quant 2.0 parity)
   if (/\b(loop|rewrite|rework|llm|agent|improve the (script|source|code))\b/.test(t)) {
     g.intent = 'loop';
-    const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null;
+    const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null || g.maxPos != null;
     if (!hasTarget) { g.primary = 'net'; }
     return g;
   }
-  const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null || g.fixedQty != null;
+  const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null || g.fixedQty != null || g.maxPos != null;
   if (g.intent === 'goal' && !hasTarget) g.intent = 'unknown';
   return g;
 }
@@ -97,6 +99,8 @@ async function tune(comp, data, goal, opts) {
   const knobDefaults = Object.fromEntries(knobs.map(k => [k.title, k.defval]));
   const baseRun = rt.runBacktest(comp, data, {}, null);
   const base = { inputs: knobDefaults, qty: comp.meta.default_qty_value || 10, stats: baseRun.stats };
+  // meta override builder: carries goal.maxPos into every backtest for a regime-consistent search
+  const mo = (q) => (goal.maxPos ? Object.assign({ max_concurrent: goal.maxPos }, q != null ? { default_qty_value: q } : {}) : (q != null ? { default_qty_value: q } : null));
   const qtyRef = 10;
   let runs = 1;
   const floor = Math.max(4, Math.min(8, Math.floor((baseRun.stats.trades || 0) * 0.6)));
@@ -132,7 +136,7 @@ async function tune(comp, data, goal, opts) {
   let yieldI = { n: 0 };
   async function ynow() { if (++yieldI.n % 24 === 0) await new Promise(r => setImmediate(r)); }
 
-  const runRef = (inputs) => rt.runBacktest(comp, data, inputs, { default_qty_value: qtyRef });
+  const runRef = (inputs) => rt.runBacktest(comp, data, inputs, mo(qtyRef));
 
   // phase 1a: profile sweep - each knob scanned across its box, others default
   const pool = [];
@@ -187,12 +191,12 @@ async function tune(comp, data, goal, opts) {
     if (runs >= maxRuns) break;
   }
 
-  if (!best1) return { baseline: base, best: rank(base.qty, baseRun.stats), runs, ms: Date.now() - t0, achieved: false, knobs: knobs.map(k => k.title) };
+  if (!best1) return { baseline: base, best: rank1(knobDefaults, baseRun.stats), runs, ms: Date.now() - t0, achieved: false, knobs: knobs.map(k => k.title) };
 
   // phase 2: consume the DD budget - binary search on position size at the winning config
   let final = null;
   if (goal.fixedQty != null) {
-    const r = rt.runBacktest(comp, data, best1.inputs, { default_qty_value: goal.fixedQty });
+    const r = rt.runBacktest(comp, data, best1.inputs, mo(goal.fixedQty));
     runs++;
     final = { inputs: best1.inputs, qty: goal.fixedQty, stats: r.stats, hard: hardPen(goal, r.stats) };
   } else {
@@ -201,14 +205,14 @@ async function tune(comp, data, goal, opts) {
     while (runs < maxRuns && hi - lo > 0.2) {
       const qty = Math.round((lo + hi) / 2 * 4) / 4;
       if (qty === lo) break;
-      const r = rt.runBacktest(comp, data, best1.inputs, { default_qty_value: qty });
+      const r = rt.runBacktest(comp, data, best1.inputs, mo(qty));
       runs++;
       if (hardPen(goal, r.stats) <= 0) { lo = qty; final = { inputs: best1.inputs, qty, stats: r.stats, hard: 0 }; }
       else hi = qty;
       await ynow();
     }
     if (!final) {
-      const r = rt.runBacktest(comp, data, best1.inputs, { default_qty_value: 1 });
+      const r = rt.runBacktest(comp, data, best1.inputs, mo(1));
       runs++;
       final = { inputs: best1.inputs, qty: 1, stats: r.stats, hard: hardPen(goal, r.stats) };
     }
@@ -277,6 +281,7 @@ function targetLine(goal) {
   if (goal.minPf != null) parts.push(`profit factor >= ${goal.minPf}`);
   if (goal.minNet != null) parts.push(`net >= ${goal.minNet}%`);
   if (goal.fixedQty != null) parts.push(`position size fixed ${goal.fixedQty}%`);
+  if (goal.maxPos != null) parts.push(`max ${goal.maxPos} concurrent position${goal.maxPos > 1 ? 's' : ''}`);
   return parts.join(' + ') || 'n/a';
 }
 

@@ -179,7 +179,7 @@ ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
     } else {
       reply += `\nCould not reach every target by tuning inputs + sizing alone on this dataset. Relax a constraint, or ask for M2 levers (hard per-trade stop, regime filter).`;
     }
-    return { reply, apply: { inputs: b.inputs, qty: b.qty } };
+    return { reply, apply: { inputs: b.inputs, qty: b.qty, maxpos: Q.maxPos || null } };
   } catch (ex) { return { reply: 'quant error: ' + ex.message }; }
 });
 

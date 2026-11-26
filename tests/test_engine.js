@@ -77,6 +77,36 @@ async function main() {
     check('python trade count within 5', trDiff <= 5, `py=${pyTr} wasm=${r.stats.trades}`);
   }
 
+  console.log('[5] max concurrent positions (multi-slot broker)');
+  const srcMx = fs.readFileSync(path.join(ROOT, 'samples', 'multientry.pine'), 'utf8');
+  const compMx = await rt.compileScript(srcMx);
+  check('multientry compiles', compMx.ok, (compMx.errs || []).map(e => 'L' + e.line + ': ' + e.msg).join(' | '));
+  const r1 = rt.runBacktest(compMx, data, {}, { max_concurrent: 1 });
+  const r2 = rt.runBacktest(compMx, data, {}, { max_concurrent: 2 });
+  check('cap1 rejects second entries', r1.stats.rejected > 0, r1.stats.rejected + ' rejected, ' + r1.stats.slotsMax + ' max');
+  check('cap2 accepts second entries', r2.stats.rejected === 0 && r2.stats.slotsMax === 2, r2.stats.trades + ' trades');
+  const mxSids = new Set(r2.trades.map(t => t.sid));
+  check('cap2 trades second entry sid', mxSids.size >= 3, 'sids: ' + [...mxSids].join(','));
+  check('cap changes net', Math.abs(r1.stats.netProfitPct - r2.stats.netProfitPct) > 1,
+    `cap1=${r1.stats.netProfitPct.toFixed(2)}% cap2=${r2.stats.netProfitPct.toFixed(2)}%`);
+  const rbBase = rt.runBacktest(comp, data);
+  const rb2 = rt.runBacktest(comp, data, {}, { max_concurrent: 2 });
+  check('alternating strategy invariant under cap2',
+    Math.abs(rbBase.stats.netProfitPct - rb2.stats.netProfitPct) < 0.01 && rbBase.stats.trades === rb2.stats.trades,
+    `${rbBase.stats.trades}==${rb2.stats.trades} trades, net equal`);
+  const outMx = pygen.generateBot(srcMx);
+  const botMxDir = path.join(ROOT, 'bots', '_test_mx');
+  fs.mkdirSync(botMxDir, { recursive: true });
+  fs.writeFileSync(path.join(botMxDir, 'bot.py'), outMx.bot);
+  fs.writeFileSync(path.join(botMxDir, 'data.csv'), dataMod.dataToCsv(data, 3000));
+  let pyMx = '';
+  try {
+    pyMx = execFileSync('python', [path.join(botMxDir, 'bot.py'), '--csv', path.join(botMxDir, 'data.csv'), '--maxpos', '2'], { encoding: 'utf8', timeout: 60000 });
+  } catch (ex) { pyMx = (ex.stdout || '') + '\nERR ' + (ex.stderr || ex.message); }
+  const mxN = pyMx.match(/NETPCT (-?[\d.]+)/);
+  check('multientry python parity cap2', !!mxN && Math.abs(Number(mxN[1]) - r2.stats.netProfitPct) < 0.5,
+    mxN ? `py=${Number(mxN[1]).toFixed(3)} wasm=${r2.stats.netProfitPct.toFixed(3)}` : pyMx.slice(0, 200));
+
   console.log(failures ? `\n${failures} FAILURES` : '\nALL TESTS PASS');
   process.exit(failures ? 1 : 0);
 }

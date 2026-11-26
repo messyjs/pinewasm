@@ -50,6 +50,7 @@
           <span id="dataLabel" class="data-label">DATA: SAMPLE 3000 BARS</span>
           <span class="chart-hint">WHEEL ZOOM - DRAG PAN - SHIFT+WHEEL PAN - DRAG AXES - DBL-CLICK FIT</span>
           <span class="spacer"></span>
+          <span class="tb-lab2">MAX POS</span><input id="maxPos" class="tb-input" type="number" min="1" max="10" step="1" value="1">
           <button id="btnLevels" class="btn">LEVELS: ON</button>
           <button id="btnSweep" class="btn">SWEEP</button>
         </div>
@@ -74,6 +75,7 @@
             <div class="chat-chips">
               <button class="chip" data-msg="max drawdown 5%">MAX DD 5%</button>
               <button class="chip" data-msg="max drawdown 10% with at least 20 trades">MAX DD 10% / 20 TRADES</button>
+              <button class="chip" data-msg="max drawdown 8% with 3 concurrent positions">3 CONCURRENT POS</button>
               <button class="chip" data-msg="loop: rewrite the strategy to cut max drawdown to 10% and raise net">LLM LOOP: DD 10%</button>
               <button class="chip" data-msg="loop: make the strategy better">LLM LOOP: FREE</button>
               <button class="chip" id="luxChip">CROSS-CHECK: LUX ENGINE</button>
