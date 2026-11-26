@@ -1,0 +1,32 @@
+//@version=6
+strategy("Band Flip [PineWASM]", overlay=true,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=20,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05)
+
+len    = input.int(20,  "Length")
+mult   = input.float(2.0, "BB Mult")
+rsiLen = input.int(14,  "RSI Length")
+
+basis = ta.sma(close, len)
+dev   = mult * ta.stdev(close, len)
+upper = basis + dev
+lower = basis - dev
+rsi   = ta.rsi(close, rsiLen)
+
+longCond  = close < lower and rsi < 35
+shortCond = close > upper and rsi > 65
+
+if strategy.position_size > 0 and close > basis
+    strategy.close("Long")
+if strategy.position_size < 0 and close < basis
+    strategy.close("Short")
+if longCond
+    strategy.entry("Long", strategy.long)
+if shortCond
+    strategy.entry("Short", strategy.short)
+
+plot(basis, "Basis", color=color.gray)
+plot(upper, "Upper", color=color.green)
+plot(lower, "Lower", color=color.red)

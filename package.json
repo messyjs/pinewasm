@@ -1,0 +1,18 @@
+{
+  "name": "pinewasm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PineWASM Desktop - compile Pine Script to WebAssembly, backtest at native speed, and export Python bots from perfected strategies.",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/test_engine.mjs"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  },
+  "dependencies": {
+    "wabt": "^1.0.39"
+  }
+}

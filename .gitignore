@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.wasm
+bots/
+__pycache__/
+electron.log

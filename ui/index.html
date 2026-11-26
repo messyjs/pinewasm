@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+<title>PineWASM</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="topbar">
+    <div class="tb-title">PINEWASM</div>
+    <div class="tb-page" id="pageLabel">COMPILER</div>
+    <div class="tb-menu">
+      <button id="menuBtn" class="tb-menu-btn">MENU</button>
+      <div id="menuDrop" class="drop hidden">
+        <div class="drop-item" data-act="open-pine">Load Pine Script...</div>
+        <div class="drop-item" data-act="open-csv">Load CSV Data...</div>
+        <div class="drop-item" data-act="fetch-okx">Fetch OKX Klines...</div>
+        <div class="drop-sep"></div>
+        <div class="drop-item" data-act="export-wasm">Export WASM + WAT...</div>
+        <div class="drop-item" data-act="page-bot">Python Bot Builder</div>
+        <div class="drop-item" data-act="page-data">Data</div>
+        <div class="drop-item" data-act="page-compiler">Compiler</div>
+        <div class="drop-sep"></div>
+        <div class="drop-item" data-act="github">GitHub Repo</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="page-compiler" class="page">
+    <div class="main-h">
+      <div class="col-editor">
+        <div class="pane-head">
+          <span class="ph-label">PINE SCRIPT EDITOR</span>
+          <button id="btnRun" class="btn btn-green">RUN</button>
+        </div>
+        <div class="editor-wrap">
+          <div id="gutter" class="gutter"></div>
+          <textarea id="editor" class="editor" spellcheck="false"></textarea>
+        </div>
+        <div class="pane-head">
+          <span class="ph-label">CONSOLE</span>
+        </div>
+        <div id="console" class="console"></div>
+      </div>
+      <div class="col-chart">
+        <div class="toolbar">
+          <span id="dataLabel" class="data-label">DATA: SAMPLE 3000 BARS</span>
+          <span class="spacer"></span>
+          <button id="btnSweep" class="btn">SWEEP</button>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="chart-wrap"><canvas id="chart"></canvas></div>
+        <div class="tables">
+          <div class="tbl-head">TRADES</div>
+          <div class="tbl-scroll"><table id="trades"></table></div>
+          <div class="tbl-head" id="sweepHead" style="display:none">SWEEP <span id="sweepName"></span></div>
+          <div class="tbl-scroll sm" id="sweepWrap" style="display:none"><table id="sweepTbl"></table></div>
+        </div>
+        <div id="sweepPanel" class="sweep-panel hidden">
+          <label>INPUT</label><select id="sweepInput"></select>
+          <label>FROM</label><input id="sweepFrom" value="5">
+          <label>STEP</label><input id="sweepStep" value="5">
+          <label>TO</label><input id="sweepTo" value="100">
+          <button id="btnSweepRun" class="btn btn-green">GO</button>
+          <button id="btnSweepClose" class="btn">CLOSE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="page-bot" class="page hidden">
+    <div class="bot-grid">
+      <div class="bot-side">
+        <div class="card">
+          <div class="ph-label">STRATEGY</div>
+          <div id="botMeta" class="bot-meta">- compile a strategy first -</div>
+        </div>
+        <div class="card">
+          <div class="ph-label">INPUTS / CONFIG.JSON</div>
+          <div id="botInputs" class="bot-inputs">-</div>
+        </div>
+        <button id="btnBuildBot" class="btn btn-green wide">BUILD PYTHON BOT</button>
+        <button id="btnOpenBot" class="btn wide">OPEN BOT FOLDER</button>
+        <div class="card">
+          <div class="ph-label">WHAT THE BOT DOES</div>
+          <div class="bot-meta">
+            Standalone per-bar bot with the same math as the WASM engine.
+            Backtest via OKX or CSV. Live mode polls closed candles and POSTs
+            tradovate-format webhooks (buy/sell/close). Edit config.json to tune.
+          </div>
+        </div>
+      </div>
+      <div class="bot-code-wrap">
+        <div class="pane-head"><span class="ph-label">bot.py PREVIEW</span></div>
+        <pre id="botCode" class="bot-code"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="page-data" class="page hidden">
+    <div class="data-grid">
+      <div class="card">
+        <div class="ph-label">OKX PUBLIC KLINES</div>
+        <div class="data-row">
+          <input id="okxSymbol" value="BTC-USDT-SWAP">
+          <select id="okxTf">
+            <option>5m</option><option selected>15m</option><option>1H</option><option>4H</option><option>1D</option>
+          </select>
+          <input id="okxLimit" value="300" style="width:70px">
+          <button id="btnOkx" class="btn btn-green">FETCH</button>
+        </div>
+        <div class="bot-meta">No API key needed. Loads into the compiler.</div>
+      </div>
+      <div class="card">
+        <div class="ph-label">CSV</div>
+        <div class="data-row">
+          <button id="btnCsv" class="btn">LOAD CSV FILE</button>
+        </div>
+        <div class="bot-meta">Format: time,open,high,low,close,volume (unix seconds or ISO date).</div>
+      </div>
+      <div class="card">
+        <div class="ph-label">SAMPLE</div>
+        <div class="data-row">
+          <button id="btnSample" class="btn">REGENERATE SAMPLE (3000 BARS)</button>
+        </div>
+        <div class="bot-meta">Deterministic synthetic trending mean-reversion series, seed 42.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="statusPill" class="pill">ENGINE IDLE</div>
+
+  <script src="app.js"></script>
+</body>
+</html>
