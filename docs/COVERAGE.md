@@ -1,4 +1,4 @@
-# Pine Script coverage (v0.1)
+# Pine Script coverage (v0.2)
 
 ## Supported
 - //@version=5/6 comments, indicator()/strategy() declarations with core kwargs
@@ -18,6 +18,12 @@
   exit with stop/limit, strategy.position_size, strategy.position_avg_price
 - fills: market orders at next bar open, stop/limit intrabar with gap-aware fills,
   percent-of-equity / fixed qty sizing, percent commissions
+- max concurrent positions (slot broker): up to N simultaneous independent positions via
+  runtime `max_concurrent` (toolbar MAX POS / QUANT goal / `--maxpos` bot flag).
+  Same-sid same-direction entries are skipped; an opposite-direction entry closes
+  conflicting slots first (netting guard); each slot keeps its own stop/limit bracket,
+  MAE/MFE and entry equity. `max_concurrent: 1` reproduces the classic netting broker
+  bit-identically (tested: bandflip 3000-bar run unchanged under cap 2).
 
 ## Not yet (roadmap M2)
 - ta: macd, bb, supertrend, linreg, hma, vwap, stoch, cci, mfi, obv, dmi, pivots,
