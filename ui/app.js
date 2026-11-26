@@ -96,6 +96,10 @@ function clampView(n) {
   if (view.start < 0) view.start = 0;
 }
 
+function chartCW() { return Math.max(100, $('chart').width - 64); }
+
+let priceZoom = 1; // vertical scale (TV-style price axis drag)
+
 function drawChart(res) {
   if (!res || !res.c.length) return;
   const cv = $('chart');
@@ -134,7 +138,11 @@ function drawChart(res) {
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi === lo) { hi = (lo === hi ? lo + 1 : hi + 1); lo -= 1; }
   const pspan = (hi - lo) || 1;
   lo -= pspan * 0.04; hi += pspan * 0.04;
-  const Y = price => padT + (1 - (price - lo) / (hi - lo)) * (candleH - padT - 4);
+  // TV-style vertical scaling: price axis drag zooms around the middle
+  const mid = (lo + hi) / 2;
+  const yLo = mid - ((mid - lo) / priceZoom);
+  const yHi = mid + ((hi - mid) / priceZoom);
+  const Y = price => padT + (1 - (price - yLo) / (yHi - yLo)) * (candleH - padT - 4);
   const X = bar => ((bar - view.start) / span) * (cw - 2) + 1;
   // grid
   ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
@@ -143,7 +151,7 @@ function drawChart(res) {
     const py = padT + g * (candleH - padT - 4) / 4;
     ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(cw, py); ctx.stroke();
     ctx.fillStyle = '#555';
-    const price = lo + (1 - (py - padT) / (candleH - padT - 4)) * (hi - lo);
+    const price = yLo + (1 - (py - padT) / (candleH - padT - 4)) * (yHi - yLo);
     ctx.fillText(price.toFixed(2), cw + 4, py + 4);
   }
   // candles (visible only)
@@ -165,7 +173,7 @@ function drawChart(res) {
   if (res.hlines) {
     for (const hl of res.hlines) {
       if (!Number.isFinite(hl.price)) continue;
-      if (hl.price < lo || hl.price > hi) continue;
+      if (hl.price < yLo || hl.price > yHi) continue;
       ctx.strokeStyle = COLORS[hl.colorId || 4] + '66';
       ctx.beginPath(); ctx.moveTo(0, Y(hl.price)); ctx.lineTo(cw, Y(hl.price)); ctx.stroke();
     }
@@ -234,43 +242,103 @@ function drawChart(res) {
     const label = `${d.getMonth() + 1}/${d.getDate()}`;
     ctx.fillText(label, X(k) - 12, H - 3);
   }
+  const gl = $('goLive');
+  if (gl) gl.classList.toggle('hidden', view.end >= n - 1.5);
 }
 
-/* zoom + pan interactions */
+/* zoom + pan interactions (TradingView-style) */
 function setupChartInteractions() {
   const cv = $('chart');
+  const nOf = () => (lastRes ? lastRes.c.length : 0);
+
+  const zoomTime = (frac, factor, pinRight) => {
+    const n = nOf();
+    const span1 = Math.min(Math.max((view.end - view.start) * factor, 2), n - 1);
+    if (pinRight) {
+      // TV behavior: pinned at the latest bar - right edge stays put while zooming
+      view.end = n - 1;
+      view.start = Math.max(0, view.end - span1);
+    } else {
+      const barA = view.start + frac * (view.end - view.start);
+      view.start = barA - frac * span1;
+      view.end = view.start + span1;
+    }
+    clampView(n);
+    drawChart(lastRes);
+  };
+
   cv.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (!lastRes) return;
-    const n = lastRes.c.length;
+    const n = nOf();
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      // shift+wheel or trackpad horizontal: pan
+      const dBar = (e.deltaX || e.deltaY) / 5;
+      view.start += dBar; view.end += dBar;
+      clampView(n);
+      drawChart(lastRes);
+      return;
+    }
     const rect = cv.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left - 1) / chartCW()));
-    const barA = view.start + frac * (view.end - view.start);
-    const factor = e.deltaY > 0 ? 1.25 : 1 / 1.25;
-    const span0 = view.end - view.start;
-    const span1 = Math.min(Math.max(span0 * factor, 2), n - 1);
-    view.start = barA - frac * span1;
-    view.end = view.start + span1;
-    clampView(n);
-    drawChart(lastRes);
+    const ax = e.clientX - rect.left;
+    const frac = Math.min(1, Math.max(0, (ax - 1) / chartCW()));
+    const factor = Math.pow(1.25, e.deltaY / 100);
+    const pinned = view.end >= n - 1.5;
+    zoomTime(frac, factor, pinned);
   }, { passive: false });
-  let panning = null;
-  cv.addEventListener('mousedown', (e) => { panning = { x: e.clientX }; e.preventDefault(); });
-  window.addEventListener('mousemove', (e) => {
-    if (!panning || !lastRes) return;
-    const n = lastRes.c.length;
-    const dx = e.clientX - panning.x;
-    panning.x = e.clientX;
-    const dBar = -(dx / Math.max(1, chartCW())) * (view.end - view.start);
-    view.start += dBar; view.end += dBar;
-    clampView(n);
-    drawChart(lastRes);
+
+  let drag = null;
+  cv.addEventListener('mousedown', (e) => {
+    if (!lastRes) return;
+    const rect = cv.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    drag = null;
+    if (x > cv.width - 64) drag = { kind: 'price', y0: y, k0: priceZoom };
+    else if (y > cv.height - 18 && x <= cv.width - 64) drag = { kind: 'time', x0: x, s0: view.end - view.start, frac: Math.min(1, Math.max(0, (x - 1) / chartCW())) };
+    else drag = { kind: 'pan', x0: x, s0: view.start, e0: view.end };
+    e.preventDefault();
   });
-  window.addEventListener('mouseup', () => { panning = null; });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag || !lastRes) return;
+    const n = nOf();
+    const rect = cv.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    if (drag.kind === 'pan') {
+      const dBar = -(x - drag.x0) / Math.max(1, chartCW()) * (drag.e0 - drag.s0);
+      view.start = drag.s0 + dBar;
+      view.end = drag.e0 + dBar;
+      clampView(n);
+      drawChart(lastRes);
+    } else if (drag.kind === 'price') {
+      priceZoom = Math.min(8, Math.max(0.2, drag.k0 * Math.exp((y - drag.y0) / 60.0)));
+      lastCanvasKey = '';
+      drawChart(lastRes);
+    } else if (drag.kind === 'time') {
+      // drag time axis: right = zoom out, left = zoom in (TV-like)
+      const span1 = Math.min(Math.max(drag.s0 * Math.exp((x - drag.x0) / 200.0), 2), n - 1);
+      const barA = view.start + drag.frac * (view.end - view.start);
+      view.start = barA - drag.frac * span1;
+      view.end = view.start + span1;
+      clampView(n);
+      drawChart(lastRes);
+    }
+  });
+  window.addEventListener('mouseup', () => { drag = null; });
   cv.addEventListener('dblclick', () => {
     if (!lastRes) return;
     viewFit(lastRes.c.length);
-    lastCanvasKey = ''; // force redraw
+    priceZoom = 1;
+    lastCanvasKey = '';
+    drawChart(lastRes);
+  });
+  $('goLive').addEventListener('click', () => {
+    const n = nOf();
+    if (!n || !lastRes) return;
+    const keep = view.end - view.start;
+    view.end = n - 1;
+    view.start = Math.max(0, n - 1 - keep);
+    clampView(n);
+    lastCanvasKey = '';
     drawChart(lastRes);
   });
   new ResizeObserver(() => { if (lastRes) drawChart(lastRes); }).observe(document.querySelector('.chart-wrap'));
@@ -326,6 +394,7 @@ async function doRun() {
     lastMeta = res.meta;
     lastInputs = null;
     lastRes = res;
+    priceZoom = 1;
     viewFit(res.c.length);
     lastCanvasKey = ''; // force redraw after new run
     renderStats(res);
