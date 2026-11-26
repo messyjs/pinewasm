@@ -29,7 +29,7 @@
 
   <div id="page-compiler" class="page">
     <div class="main-h">
-      <div class="col-editor">
+      <div class="col-editor" id="colEditor">
         <div class="pane-head">
           <span class="ph-label">PINE SCRIPT EDITOR</span>
           <button id="btnRun" class="btn btn-green">RUN</button>
@@ -38,19 +38,23 @@
           <div id="gutter" class="gutter"></div>
           <textarea id="editor" class="editor" spellcheck="false"></textarea>
         </div>
+        <div id="hsplit1" class="hsplit"></div>
         <div class="pane-head">
           <span class="ph-label">CONSOLE</span>
         </div>
         <div id="console" class="console"></div>
       </div>
+      <div id="vsplit" class="vsplit"></div>
       <div class="col-chart">
         <div class="toolbar">
           <span id="dataLabel" class="data-label">DATA: SAMPLE 3000 BARS</span>
+          <span class="chart-hint">WHEEL ZOOM - DRAG PAN - DBL-CLICK FIT</span>
           <span class="spacer"></span>
           <button id="btnSweep" class="btn">SWEEP</button>
         </div>
         <div class="stats" id="stats"></div>
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
+        <div id="hsplit2" class="hsplit"></div>
         <div class="tables">
           <div class="tbl-head">TRADES</div>
           <div class="tbl-scroll"><table id="trades"></table></div>

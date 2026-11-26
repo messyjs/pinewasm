@@ -23,7 +23,7 @@ body { font-family: 'Space Grotesk', Arial, sans-serif; font-size: 14px; }
 
 .page { height: calc(100vh - 40px); }
 .main-h { display: flex; height: 100%; }
-.col-editor { width: 42%; min-width: 380px; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+.col-editor { width: 42%; min-width: 280px; display: flex; flex-direction: column; border-right: 1px solid var(--border); flex-shrink: 0; }
 .col-chart { flex: 1; display: flex; flex-direction: column; overflow: auto; }
 
 .pane-head { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg); }
@@ -35,6 +35,13 @@ body { font-family: 'Space Grotesk', Arial, sans-serif; font-size: 14px; }
 .console .err { color: var(--red); }
 .console .ok { color: var(--green); }
 .console .dim { color: var(--text3); }
+
+.chart-hint { font-size: 12px; color: var(--text3); letter-spacing: 1px; }
+.vsplit { width: 6px; cursor: col-resize; background: var(--bg); border-left: 1px solid var(--border); flex-shrink: 0; }
+.hsplit { height: 6px; cursor: row-resize; background: var(--bg); border-top: 1px solid var(--border); flex-shrink: 0; }
+.vsplit:hover, .hsplit:hover { background: var(--surface2); }
+body.dragging-x { cursor: col-resize; user-select: none; }
+body.dragging-y { cursor: row-resize; user-select: none; }
 
 .toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .data-label { font-size: 12px; color: var(--text2); letter-spacing: 1px; }

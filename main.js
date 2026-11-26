@@ -20,6 +20,8 @@ function createWindow() {
     y: wa.y + Math.round(wa.height * 0.05),
     width: Math.round(wa.width * 0.88),
     height: Math.round(wa.height * 0.88),
+    minWidth: 1000,
+    minHeight: 620,
     backgroundColor: '#000000',
     title: 'PineWASM',
     autoHideMenuBar: true,

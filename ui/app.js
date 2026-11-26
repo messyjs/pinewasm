@@ -78,41 +78,66 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-/* ---------- chart ---------- */
+/* ---------- chart (zoom + pan + live resize) ---------- */
 const COLORS = ['#CE2029', '#32CD32', '#1E90FF', '#FFFFFF', '#808080'];
+let lastRes = null;
+let view = { start: 0, end: 1 };
+let chartH = 300;
+let lastCanvasKey = '';
+
+function viewFit(n) { view.start = 0; view.end = Math.max(1, n - 1); }
+
+function clampView(n) {
+  const minSpan = Math.min(n, 2);
+  if (view.end - view.start < minSpan) view.end = Math.min(n - 1, view.start + minSpan);
+  if (view.end - view.start > n - 1) { view.start = 0; view.end = n - 1; }
+  if (view.start < 0) { view.end -= view.start; view.start = 0; }
+  if (view.end > n - 1) { view.start -= view.end - (n - 1); view.end = n - 1; }
+  if (view.start < 0) view.start = 0;
+}
+
 function drawChart(res) {
+  if (!res || !res.c.length) return;
   const cv = $('chart');
   const wrap = cv.parentElement;
-  const W = wrap.clientWidth - 20;
+  const W = Math.max(320, wrap.clientWidth - 20);
   const overlay = res.meta && res.meta.overlay;
   const subH = overlay ? 0 : 110;
-  const H = 280 + subH;
+  const H = chartH + subH;
+  const n = res.c.length;
+  clampView(n);
+  const key = [W, H, view.start.toFixed(3), view.end.toFixed(3), res.trades.length, res.plots.length, res.nbars].join('|');
+  if (key === lastCanvasKey) return;
+  lastCanvasKey = key;
   cv.width = W; cv.height = H;
   cv.style.height = H + 'px';
   const ctx = cv.getContext('2d');
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
-  const n = res.c.length;
-  if (!n) return;
   const padR = 64, padT = 8, padB = 18;
   const cw = W - padR;
-  const candleH = overlay ? H - padB : 280;
-  // y range: candles + overlay plots
+  const span = Math.max(0.0001, view.end - view.start);
+  const i0 = Math.max(0, Math.floor(view.start));
+  const i1 = Math.min(n - 1, Math.ceil(view.end));
+  const candleH = overlay ? H - padB : chartH;
+  // price range over visible bars (+ visible overlay plots)
   let lo = Infinity, hi = -Infinity;
-  for (let k = 0; k < n; k++) { if (res.l[k] < lo) lo = res.l[k]; if (res.h[k] > hi) hi = res.h[k]; }
+  for (let k = i0; k <= i1; k++) { if (res.l[k] < lo) lo = res.l[k]; if (res.h[k] > hi) hi = res.h[k]; }
   if (overlay && res.plots) {
     for (const p of res.plots) {
-      for (const v of p.values) { if (v === v && v < hi) hi = Math.max(hi, v); if (v === v && v > lo) lo = Math.min(lo, v); }
+      for (let k = Math.max(0, i0); k <= i1; k++) {
+        const v = p.values[k];
+        if (v === v) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      }
     }
   }
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi === lo) { hi = lo + 1; lo -= 1; }
-  const span = hi - lo;
-  lo -= span * 0.04; hi += span * 0.04;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi === lo) { hi = (lo === hi ? lo + 1 : hi + 1); lo -= 1; }
+  const pspan = (hi - lo) || 1;
+  lo -= pspan * 0.04; hi += pspan * 0.04;
   const Y = price => padT + (1 - (price - lo) / (hi - lo)) * (candleH - padT - 4);
-  const X = bar => (bar / Math.max(1, n - 1)) * (cw - 2) + 1;
+  const X = bar => ((bar - view.start) / span) * (cw - 2) + 1;
   // grid
   ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
-  ctx.font = '11px JetBrains Mono'; // hline price labels only, chart text allowed 12px min? keep 12
   ctx.font = '12px JetBrains Mono';
   for (let g = 0; g <= 4; g++) {
     const py = padT + g * (candleH - padT - 4) / 4;
@@ -121,10 +146,12 @@ function drawChart(res) {
     const price = lo + (1 - (py - padT) / (candleH - padT - 4)) * (hi - lo);
     ctx.fillText(price.toFixed(2), cw + 4, py + 4);
   }
-  // candles
-  const bw = Math.max(1, (cw / n) * 0.6);
-  for (let k = 0; k < n; k++) {
+  // candles (visible only)
+  const vis = (i1 - i0) + 1;
+  const bw = Math.max(1, (cw / Math.max(1, vis)) * 0.6);
+  for (let k = i0; k <= i1; k++) {
     const x = X(k);
+    if (x < -bw || x > cw + bw) continue;
     const up = res.c[k] >= res.o[k];
     ctx.strokeStyle = up ? '#32CD32' : '#CE2029';
     ctx.fillStyle = ctx.strokeStyle;
@@ -147,62 +174,143 @@ function drawChart(res) {
   if (res.plots) {
     for (const p of res.plots) {
       const vals = p.values;
+      let mn = Infinity, mx = -Infinity;
+      for (const q of vals) { if (q === q) { if (q < mn) mn = q; if (q > mx) mx = q; } }
+      if (!Number.isFinite(mn) || mx === mn) { mx = mn + 1; mn -= 0.5; }
       const inMain = overlay;
-      const yOf = v => inMain
-        ? Y(v)
-        : 290 + (1 - normIn(v)) * (subH - 10) + 4;
-      function normIn(v) {
-        let mn = Infinity, mx = -Infinity;
-        for (const q of vals) { if (q === q) { if (q < mn) mn = q; if (q > mx) mx = q; } }
-        if (!Number.isFinite(mn) || mx === mn) return 0.5;
-        return (v - mn) / (mx - mn);
-      }
+      const yOf = v => inMain ? Y(v) : chartH + 12 + (1 - (v - mn) / (mx - mn)) * (subH - 18);
       ctx.strokeStyle = COLORS[p.colorId] || COLORS[1];
       ctx.beginPath();
       let started = false;
-      for (let k = 0; k < n; k++) {
+      const k0 = Math.max(0, i0 - 1);
+      for (let k = k0; k <= i1; k++) {
         const v = vals[k];
         if (v !== v) { started = false; continue; }
         const x = X(k), y = yOf(v);
         if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
       }
       ctx.stroke();
+      if (!inMain) {
+        ctx.fillStyle = '#555';
+        ctx.fillText(p.title + ': ' + (Number.isFinite(vals[i1]) ? vals[i1].toFixed(2) : '-'), 6, chartH + 12);
+      }
     }
   }
   // shapes
   if (res.shapes) {
+    ctx.fillStyle = '#1E90FF';
     for (const bar of res.shapes) {
+      if (bar < i0 || bar > i1) continue;
       const x = X(bar);
       const y = Y(res.c[bar]) + 10;
-      ctx.fillStyle = '#1E90FF';
       ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x - 4, y + 3); ctx.lineTo(x + 4, y + 3); ctx.closePath(); ctx.fill();
     }
   }
   // trades
   if (res.trades) {
     for (const t of res.trades) {
-      const x = X(t.entryBar), y = Y(t.entryPx);
       const ent = t.dir > 0;
-      ctx.fillStyle = ent ? '#32CD32' : '#CE2029';
-      ctx.beginPath();
-      if (ent) { ctx.moveTo(x, y - 8); ctx.lineTo(x - 5, y + 1); ctx.lineTo(x + 5, y + 1); }
-      else { ctx.moveTo(x, y + 8); ctx.lineTo(x - 5, y - 1); ctx.lineTo(x + 5, y - 1); }
-      ctx.closePath(); ctx.fill();
-      if (Number.isFinite(t.exitPx)) {
+      if (t.entryBar >= i0 - 1 && t.entryBar <= i1 + 1) {
+        const x = X(t.entryBar), y = Y(t.entryPx);
+        ctx.fillStyle = ent ? '#32CD32' : '#CE2029';
+        ctx.beginPath();
+        if (ent) { ctx.moveTo(x, y - 8); ctx.lineTo(x - 5, y + 1); ctx.lineTo(x + 5, y + 1); }
+        else { ctx.moveTo(x, y + 8); ctx.lineTo(x - 5, y - 1); ctx.lineTo(x + 5, y - 1); }
+        ctx.closePath(); ctx.fill();
+      }
+      if (Number.isFinite(t.exitPx) && t.exitBar >= i0 - 1 && t.exitBar <= i1 + 1) {
         const x2 = X(t.exitBar), y2 = Y(t.exitPx);
         ctx.strokeStyle = '#888';
         ctx.beginPath(); ctx.arc(x2, y2, 3.5, 0, Math.PI * 2); ctx.stroke();
       }
     }
   }
-  // date labels
+  // date labels (visible range)
   ctx.fillStyle = '#555';
-  const step = Math.max(1, Math.floor(n / 6));
-  for (let k = Math.floor(step / 2); k < n; k += step) {
+  const stepB = Math.max(1, Math.round(span / 6));
+  for (let k = Math.ceil(view.start); k <= view.end; k += stepB) {
+    if (k < 0 || k >= n) continue;
     const d = new Date(res.t[k] * 1000);
     const label = `${d.getMonth() + 1}/${d.getDate()}`;
     ctx.fillText(label, X(k) - 12, H - 3);
   }
+}
+
+/* zoom + pan interactions */
+function setupChartInteractions() {
+  const cv = $('chart');
+  cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!lastRes) return;
+    const n = lastRes.c.length;
+    const rect = cv.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left - 1) / chartCW()));
+    const barA = view.start + frac * (view.end - view.start);
+    const factor = e.deltaY > 0 ? 1.25 : 1 / 1.25;
+    const span0 = view.end - view.start;
+    const span1 = Math.min(Math.max(span0 * factor, 2), n - 1);
+    view.start = barA - frac * span1;
+    view.end = view.start + span1;
+    clampView(n);
+    drawChart(lastRes);
+  }, { passive: false });
+  let panning = null;
+  cv.addEventListener('mousedown', (e) => { panning = { x: e.clientX }; e.preventDefault(); });
+  window.addEventListener('mousemove', (e) => {
+    if (!panning || !lastRes) return;
+    const n = lastRes.c.length;
+    const dx = e.clientX - panning.x;
+    panning.x = e.clientX;
+    const dBar = -(dx / Math.max(1, chartCW())) * (view.end - view.start);
+    view.start += dBar; view.end += dBar;
+    clampView(n);
+    drawChart(lastRes);
+  });
+  window.addEventListener('mouseup', () => { panning = null; });
+  cv.addEventListener('dblclick', () => {
+    if (!lastRes) return;
+    viewFit(lastRes.c.length);
+    lastCanvasKey = ''; // force redraw
+    drawChart(lastRes);
+  });
+  new ResizeObserver(() => { if (lastRes) drawChart(lastRes); }).observe(document.querySelector('.chart-wrap'));
+}
+
+/* resizable splitters */
+function setupSplitters() {
+  const drag = (id, cls, onMove) => {
+    const el = $(id);
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.body.classList.add(cls);
+      const startY = e.clientY, startX = e.clientX;
+      const move = (ev) => onMove({ x: ev.clientX, y: ev.clientY, dx: ev.clientX - startX, dy: ev.clientY - startY });
+      const up = () => {
+        document.body.classList.remove(cls);
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+  };
+  drag('vsplit', 'dragging-x', ({ x }) => {
+    const main = document.querySelector('.main-h').getBoundingClientRect();
+    const w = Math.max(280, Math.min(main.width - 420, x - main.left));
+    $('colEditor').style.width = w + 'px';
+    if (lastRes) drawChart(lastRes);
+  });
+  drag('hsplit1', 'dragging-y', ({ y }) => {
+    const col = $('colEditor').getBoundingClientRect();
+    const h = Math.max(90, Math.min(col.height - 160, col.bottom - y - 30));
+    $('console').style.height = h + 'px';
+  });
+  drag('hsplit2', 'dragging-y', ({ y }) => {
+    const wrap = document.querySelector('.chart-wrap').getBoundingClientRect();
+    chartH = Math.max(140, Math.min(1400, y - wrap.top - 14));
+    lastCanvasKey = '';
+    if (lastRes) drawChart(lastRes);
+  });
 }
 
 /* ---------- run ---------- */
@@ -217,6 +325,9 @@ async function doRun() {
     }
     lastMeta = res.meta;
     lastInputs = null;
+    lastRes = res;
+    viewFit(res.c.length);
+    lastCanvasKey = ''; // force redraw after new run
     renderStats(res);
     drawChart(res);
     renderTrades(res.trades);
@@ -398,6 +509,8 @@ $('btnSample').onclick = () => {
 };
 
 /* ---------- boot ---------- */
+setupChartInteractions();
+setupSplitters();
 editor.value = SAMPLE;
 syncGutter();
 setPill('ENGINE IDLE');
