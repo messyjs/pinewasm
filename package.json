@@ -10,7 +10,7 @@
     "test": "node tests/test_engine.mjs"
   },
   "devDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^36.9.5"
   },
   "dependencies": {
     "wabt": "^1.0.39"

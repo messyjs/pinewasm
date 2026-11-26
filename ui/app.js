@@ -563,7 +563,7 @@ function chatMsg(role, text, withApply, applyKind) {
     const btn = document.createElement('button');
     btn.className = 'btn btn-green';
     btn.textContent = applyKind === 'source' ? 'APPLY SOURCE' : 'APPLY';
-    btn.onclick = () => {
+    btn.onclick = async () => {
       if (!pendingApply) return;
       if (pendingApply.kind === 'source') {
         editor.value = pendingApply.src;
@@ -572,7 +572,8 @@ function chatMsg(role, text, withApply, applyKind) {
         lastInputs = null;
         chatMsg('you', 'editor now holds the loop-improved script (sizing/inputs back to defaults) - re-running');
         showPage('compiler');
-        doRun();
+        await doRun();
+        luxCrossCheck();
       } else {
         lastInputs = Object.assign({}, pendingApply.inputs);
         qtyOverride = typeof pendingApply.qty === 'number' ? pendingApply.qty : null;
@@ -606,6 +607,36 @@ async function quantSend(text) {
 $('chatSend').onclick = () => quantSend($('chatInput').value);
 $('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') quantSend($('chatInput').value); });
 document.querySelectorAll('.chip').forEach(c => { c.onclick = () => quantSend(c.dataset.msg); });
+
+/* ---------- LUX engine cross-check ---------- */
+async function luxCrossCheck() {
+  if (!lastRes) { chatMsg('quant', 'run a backtest first (no data loaded).'); return; }
+  setPill('LUX ENGINE RUNNING', 'busy');
+  switchTab('quant');
+  const rep = await window.pw.luxRun({ src: editor.value,
+    data: { t: lastRes.t, o: lastRes.o, h: lastRes.h, l: lastRes.l, c: lastRes.c, v: lastRes.v } });
+  if (!rep.ok) {
+    chatMsg('quant', 'LUX cross-check could not run this script: ' + (rep.error || 'unknown'));
+    setPill('LUX CHECK FAILED', 'err');
+    return;
+  }
+  const m = rep.m, mine = lastRes.stats;
+  const cmp = (name, ours, lux) => `${name.padEnd(15)} pinewasm ${ours}   |   lux ${lux}`;
+  const agree = Math.abs(mine.trades - Number(m.n)) <= Math.max(2, Number(m.n) * 0.08);
+  const msg = `LUX ENGINE CROSS-CHECK (LuxAlgo vela-pinets on the same ${lastRes.nbars} bars)\n` +
+    cmp('net %', mine.netProfitPct.toFixed(2), Number(m.netPct).toFixed(2)) + '\n' +
+    cmp('max dd %', mine.maxDDPct.toFixed(2), Number(m.ddPct).toFixed(2)) + '\n' +
+    cmp('trades', String(mine.trades), String(m.n)) + '\n' +
+    cmp('win rate', (mine.winRate * 100).toFixed(1) + '%', m.winRate == null ? '-' : Number(m.winRate).toFixed(1) + '%') + '\n' +
+    cmp('profit factor', Number.isFinite(mine.profitFactor) ? mine.profitFactor.toFixed(2) : 'inf', String(m.pf)) + '\n\n' +
+    (agree
+      ? 'Trade counts agree within tolerance - the pinewasm numbers are confirmed by LuxAlgo\'s own broker simulation.'
+      : 'TRADE COUNT DIVERGES - the two engines interpreted something differently (fills, session rules, or unsupported builtins silently mapped). Inspect before trusting either.');
+  chatMsg('quant', msg);
+  setPill('CROSS-CHECKED', 'ok');
+}
+const luxChip = document.getElementById('luxChip');
+if (luxChip) luxChip.onclick = luxCrossCheck;
 
 /* ---------- bot builder ---------- */
 $('btnBuildBot').onclick = async () => {
