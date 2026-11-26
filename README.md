@@ -43,9 +43,10 @@ Pine source -> lexer -> parser (AST) -> function inlining -> series materializat
   duration (bars + wall time), qty, position size vs equity at entry - table columns plus
   hover row detail
 - **QUANT chat**: type targets ("max drawdown 5% with at least 20 trades") -> constraint
-  optimizer sweeps inputs + sizes into the DD budget; "3 concurrent positions" supported.
-  LLM loop mode rewrites the source itself (self-healing compile) and APPLY swaps the
-  editor. Trades off net%/PF/DD with hard vs soft penalties.
+  optimizer sweeps inputs + fits sizing and slot cap into the DD budget (auto tries max
+  1-3 concurrent positions, pins it if you say so - "3 concurrent positions"). LLM loop
+  mode rewrites the source itself (self-healing compile) and APPLY swaps the editor.
+  Trades off net%/PF/DD with hard vs soft penalties.
 - **Second-engine cross-check**: the LuxAlgo vela-pinets engine runs the same script on
   the same bars (CROSS-CHECK chip) and compares net/trades/win rate/PF. DD lines are not
   comparable (lux DD is per-trade positional, pinewasm is equity-ledger peak-trough).

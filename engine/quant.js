@@ -99,8 +99,6 @@ async function tune(comp, data, goal, opts) {
   const knobDefaults = Object.fromEntries(knobs.map(k => [k.title, k.defval]));
   const baseRun = rt.runBacktest(comp, data, {}, null);
   const base = { inputs: knobDefaults, qty: comp.meta.default_qty_value || 10, stats: baseRun.stats };
-  // meta override builder: carries goal.maxPos into every backtest for a regime-consistent search
-  const mo = (q) => (goal.maxPos ? Object.assign({ max_concurrent: goal.maxPos }, q != null ? { default_qty_value: q } : {}) : (q != null ? { default_qty_value: q } : null));
   const qtyRef = 10;
   let runs = 1;
   const floor = Math.max(4, Math.min(8, Math.floor((baseRun.stats.trades || 0) * 0.6)));
@@ -136,7 +134,12 @@ async function tune(comp, data, goal, opts) {
   let yieldI = { n: 0 };
   async function ynow() { if (++yieldI.n % 24 === 0) await new Promise(r => setImmediate(r)); }
 
-  const runRef = (inputs) => rt.runBacktest(comp, data, inputs, mo(qtyRef));
+  // mk(q, cap): meta override builder - goal.maxPos pins the cap; otherwise cap comes from the caller (auto caps)
+  const mk = (q, cap) => (goal.maxPos != null
+    ? Object.assign({ max_concurrent: goal.maxPos }, q != null ? { default_qty_value: q } : {})
+    : (q != null ? { default_qty_value: q, max_concurrent: cap || 1 } : null));
+
+  const runRef = (inputs) => rt.runBacktest(comp, data, inputs, mk(qtyRef, 1));
 
   // phase 1a: profile sweep - each knob scanned across its box, others default
   const pool = [];
@@ -194,29 +197,49 @@ async function tune(comp, data, goal, opts) {
   if (!best1) return { baseline: base, best: rank1(knobDefaults, baseRun.stats), runs, ms: Date.now() - t0, achieved: false, knobs: knobs.map(k => k.title) };
 
   // phase 2: consume the DD budget - binary search on position size at the winning config
-  let final = null;
-  if (goal.fixedQty != null) {
-    const r = rt.runBacktest(comp, data, best1.inputs, mo(goal.fixedQty));
-    runs++;
-    final = { inputs: best1.inputs, qty: goal.fixedQty, stats: r.stats, hard: hardPen(goal, r.stats) };
-  } else {
-    let lo = 1, hi = 100;
-    if ((baseRun.stats.maxDDPct / 20) * 1 > T * 100 && baseRun.stats.trades > 0) { /* degenerate guard, ignore */ }
+  const fitQty = async (inputs, cap) => {
+    if (goal.fixedQty != null) {
+      const r = rt.runBacktest(comp, data, inputs, mk(goal.fixedQty, cap));
+      runs++;
+      return { inputs, qty: goal.fixedQty, maxpos: goal.maxPos || cap, stats: r.stats, hard: hardPen(goal, r.stats) };
+    }
+    let lo = 1, hi = 100, hit = null;
     while (runs < maxRuns && hi - lo > 0.2) {
       const qty = Math.round((lo + hi) / 2 * 4) / 4;
-      if (qty === lo) break;
-      const r = rt.runBacktest(comp, data, best1.inputs, mo(qty));
+      if (qty === lo || qty === hi) break; // midpoint rounded onto a bound - no progress possible
+      const r = rt.runBacktest(comp, data, inputs, mk(qty, cap));
       runs++;
-      if (hardPen(goal, r.stats) <= 0) { lo = qty; final = { inputs: best1.inputs, qty, stats: r.stats, hard: 0 }; }
+      if (hardPen(goal, r.stats) <= 0) { lo = qty; hit = { inputs, qty, maxpos: goal.maxPos || cap, stats: r.stats, hard: 0 }; }
       else hi = qty;
       await ynow();
     }
-    if (!final) {
-      const r = rt.runBacktest(comp, data, best1.inputs, mo(1));
+    if (!hit) {
+      const r = rt.runBacktest(comp, data, inputs, mk(1, cap));
       runs++;
-      final = { inputs: best1.inputs, qty: 1, stats: r.stats, hard: hardPen(goal, r.stats) };
+      hit = { inputs, qty: 1, maxpos: goal.maxPos || cap, stats: r.stats, hard: hardPen(goal, r.stats) };
     }
+    return hit;
+  };
+  let final = null;
+  if (goal.maxPos != null) {
+    final = await fitQty(best1.inputs, 1); // cap pinned by the goal
+  } else {
+    // auto: also fit the slot cap (1..3) - more slots means simultaneous same-dir entries,
+    // which usually raises net at the same DD budget; ties prefer fewer slots
+    const cands = [];
+    for (const cap of [1, 2, 3]) {
+      if (runs >= maxRuns) break;
+      cands.push(await fitQty(best1.inputs, cap));
+    }
+    cands.sort((a, b2) => {
+      const fa = a.hard <= 0, fb2 = b2.hard <= 0;
+      if (fa !== fb2) return fa ? -1 : 1;
+      if (Math.abs(a.stats.netProfitPct - b2.stats.netProfitPct) > 1e-9) return b2.stats.netProfitPct - a.stats.netProfitPct;
+      return (a.maxpos || 1) - (b2.maxpos || 1);
+    });
+    final = cands[0] || null;
   }
+  if (!final) final = { inputs: best1.inputs, qty: 1, maxpos: 1, stats: baseRun.stats, hard: hardPen(goal, baseRun.stats) };
 
   // report the better of (budget-filled config) and any direct hit found along the way
   const bestFinal = final;
@@ -296,6 +319,7 @@ function changesLine(baseline, best, knobs) {
   if (best.stats && Math.abs((best.qty || 0) - (baseline.qty || 0)) > 1e-9) {
     out.unshift(`sizing ${baseline.qty}% -> ${best.qty}%`);
   }
+  if (best.maxpos != null && best.maxpos > 1) out.push(`max positions ${best.maxpos}`);
   return out.length ? out.join(', ') : 'inputs already near-optimal';
 }
 
