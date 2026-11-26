@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('pw', {
   run: (payload) => ipcRenderer.invoke('run', payload),
   sweep: (payload) => ipcRenderer.invoke('sweep', payload),
   quantChat: (p) => ipcRenderer.invoke('quant-chat', p),
+  quantLoop: (p) => ipcRenderer.invoke('quant-loop', p),
   fetchKlines: (p) => ipcRenderer.invoke('fetch-klines', p),
   genbot: (p) => ipcRenderer.invoke('genbot', p),
   openPath: (p) => ipcRenderer.invoke('open-path', p),

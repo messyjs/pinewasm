@@ -59,6 +59,13 @@ function parseGoal(text) {
   if (/(higher|maximi[sz]e|more|best)\s*(net|profit|return)/.test(t) || /max profit/.test(t)) g.primary = 'net';
   if (!/\d/.test(t) && /(help|what can|how do|hello|hi\b|hey\b)/.test(t)) g.intent = 'help';
   if (!/\d/.test(t) && /(stats|baseline|current|performance|how is it|explain)/.test(t)) g.intent = 'stats';
+  // LLM loop mode: source-rewriting agent loop (Quant 2.0 parity)
+  if (/\b(loop|rewrite|rework|llm|agent|improve the (script|source|code))\b/.test(t)) {
+    g.intent = 'loop';
+    const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null;
+    if (!hasTarget) { g.primary = 'net'; }
+    return g;
+  }
   const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null || g.fixedQty != null;
   if (g.intent === 'goal' && !hasTarget) g.intent = 'unknown';
   return g;

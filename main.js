@@ -103,6 +103,36 @@ ipcMain.handle('sweep', async (_e, payload) => {
   } catch (ex) { return { ok: false, errs: [{ line: 0, msg: 'sweep: ' + ex.message }] }; }
 });
 
+async function quantLoopImpl(src, data, message, rounds) {
+  const q = require('./engine/quant');
+  const loop = require('./engine/loop');
+  const Q = Object.assign({}, q.parseGoal(message), { __msg: message });
+  const res = await loop.runLoop(src, data, Q, { iterations: Math.min(Math.max(Number(rounds) || 4, 1), 8) });
+  if (!res.ok && res.error) return { reply: 'LOOP failed: ' + res.error };
+  let reply = 'LLM LOOP (' + res.rounds.length + ' runs)\nbaseline: ' + q.statsLine(res.base.stats) + ' (score ' + res.base.score + ')';
+  for (const r2 of res.rounds) {
+    if (r2.kind === 'baseline') continue;
+    if (r2.kind === 'model' || r2.kind === 'compile') reply += `\nR${r2.i}: ${r2.kind === 'model' ? 'llm miss' : 'compile fail'} - ${r2.error}`;
+    else {
+      const mark = res.best.round === r2.i ? ' <- BEST' : '';
+      reply += `\nR${r2.i}: net ${Number(r2.stats.netProfitPct).toFixed(2)}% | dd ${Number(r2.stats.maxDDPct).toFixed(2)}% | ${r2.stats.trades} trades | pf ${Number.isFinite(r2.stats.profitFactor) ? Number(r2.stats.profitFactor).toFixed(2) : 'inf'} | win ${(r2.stats.winRate * 100).toFixed(0)}% | score ${r2.score}${mark}`;
+    }
+  }
+  const improved = res.best.score - res.base.score;
+  reply += `\n\nBEST: round ${res.best.round} - score ${res.best.score} vs baseline ${res.base.score} (${improved >= 0 ? '+' : ''}${improved.toFixed(1)}) in ${(res.ms / 1000).toFixed(0)}s`;
+  reply += `\nBest stats: ${q.statsLine(res.best.stats)}`;
+  reply += `\nAPPLY SOURCE replaces the editor with the improved script (original stays recoverable from chat).`;
+  return { reply, applySource: res.best.source };
+}
+
+ipcMain.handle('quant-loop', async (_e, { src, dataSpec, message, rounds }) => {
+  try {
+    const data = loadData(dataSpec);
+    return await quantLoopImpl(src, data, message, rounds);
+  } catch (ex) { return { reply: 'loop error: ' + ex.message };
+  }
+});
+
 ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
   try {
     const comp = await getCompiled(src);
@@ -116,6 +146,9 @@ ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
     const data = loadData(dataSpec);
     const q = require('./engine/quant');
     const Q = Object.assign({}, q.parseGoal(message), { __msg: message });
+    if (Q.intent === 'loop') {
+      return await quantLoopImpl(src, data, message, 4);
+    }
     if (Q.intent === 'help' || Q.intent === 'unknown') return { reply: q.helpText(Q) };
     const baseRun = rt.runBacktest(comp, data, {}, null);
     const eq = baseRun.equity;

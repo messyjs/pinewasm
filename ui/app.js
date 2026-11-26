@@ -545,7 +545,7 @@ document.querySelectorAll('.qtab').forEach(b => { b.onclick = () => switchTab(b.
 
 let qtyOverride = null;
 let pendingApply = null;
-function chatMsg(role, text, withApply) {
+function chatMsg(role, text, withApply, applyKind) {
   const log = $('chatLog');
   const d = document.createElement('div');
   d.className = 'chat-m ' + (role === 'quant' ? 'q' : 'you');
@@ -562,15 +562,25 @@ function chatMsg(role, text, withApply) {
     row.className = 'applyRow';
     const btn = document.createElement('button');
     btn.className = 'btn btn-green';
-    btn.textContent = 'APPLY';
+    btn.textContent = applyKind === 'source' ? 'APPLY SOURCE' : 'APPLY';
     btn.onclick = () => {
       if (!pendingApply) return;
-      lastInputs = Object.assign({}, pendingApply.inputs);
-      qtyOverride = typeof pendingApply.qty === 'number' ? pendingApply.qty : null;
-      const kv = Object.entries(lastInputs).map(([k2, v]) => k2 + '=' + v).join(', ');
-      chatMsg('you', 'applied ' + (kv ? kv : 'signal inputs unchanged') + (qtyOverride != null ? ' | sizing ' + qtyOverride + '%' : ''));
-      showPage('compiler');
-      doRun();
+      if (pendingApply.kind === 'source') {
+        editor.value = pendingApply.src;
+        syncGutter();
+        qtyOverride = null;
+        lastInputs = null;
+        chatMsg('you', 'editor now holds the loop-improved script (sizing/inputs back to defaults) - re-running');
+        showPage('compiler');
+        doRun();
+      } else {
+        lastInputs = Object.assign({}, pendingApply.inputs);
+        qtyOverride = typeof pendingApply.qty === 'number' ? pendingApply.qty : null;
+        const kv = Object.entries(lastInputs).map(([k2, v]) => k2 + '=' + v).join(', ');
+        chatMsg('you', 'applied ' + (kv ? kv : 'signal inputs unchanged') + (qtyOverride != null ? ' | sizing ' + qtyOverride + '%' : ''));
+        showPage('compiler');
+        doRun();
+      }
     };
     row.appendChild(btn);
     d.appendChild(row);
@@ -587,8 +597,8 @@ async function quantSend(text) {
   setPill('QUANT THINKING', 'busy');
   switchTab('quant');
   const res = await window.pw.quantChat({ src: editor.value, dataSpec, message: text });
-  pendingApply = res.apply || null;
-  chatMsg('quant', res.reply, !!pendingApply);
+  pendingApply = res.applySource ? { kind: 'source', src: res.applySource } : (res.apply ? Object.assign({ kind: 'params' }, res.apply) : null);
+  chatMsg('quant', res.reply, !!pendingApply, pendingApply && pendingApply.kind);
   if (res.reply.indexOf('HIT:') === 0 || res.reply.indexOf('\nHIT:') >= 0) setPill('TARGET HIT', 'ok');
   else if (res.reply.indexOf('CLOSEST:') >= 0) setPill('TARGET MISSED', 'err');
   else setPill('QUANT READY', 'ok');

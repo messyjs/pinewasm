@@ -714,6 +714,8 @@ ${flags.join('\n')}
 ;; bar body
 (func $body (param $bar i32)
 ${Array.from({ length: 16 }, (_, k) => `(local $fv_${k} f64)`).join('\n')}
+${Array.from({ length: 24 }, (_, k) => `(local $f${k} f64)`).join('\n')}
+${Array.from({ length: 16 }, (_, k) => `(local $i${k} i32)`).join('\n')}
 ${bodyWat}
 )
 
