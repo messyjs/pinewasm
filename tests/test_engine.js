@@ -34,6 +34,18 @@ async function main() {
     'net=' + r.stats.netProfit.toFixed(2) + ' pf=' + r.stats.profitFactor.toFixed(2) + ' mdd%=' + r.stats.maxDDPct.toFixed(2));
   check('plots produced', r.plots.length === 3, r.plots.map(p => p.title).join(','));
 
+  console.log('[2b] per-trade enrichment (mae/mfe/duration/qty%)');
+  const trs = r.trades;
+  const bad = trs.filter(t => !(t.durationBars >= 1) || !Number.isFinite(t.mae) || !Number.isFinite(t.mfe)
+    || t.mae > 0 || t.mfe < 0 || !(t.eqPct > 0) || !Number.isFinite(t.entryEq) || !(t.durationMs >= 0));
+  check('all trades carry enrichment invariants', trs.length > 0 && bad.length === 0,
+    bad.length ? bad.length + ' bad: ' + JSON.stringify(bad[0]).slice(0, 200) : trs.length + ' trades ok');
+  const exc = trs.filter(t => t.mae === 0 && t.mfe === 0);
+  check('excursions not all zero', exc.length < trs.length, 'flat: ' + exc.length + '/' + trs.length);
+  const first = trs[0];
+  check('sample mae/mfe magnitude sane', Number.isFinite(first.maePct) && Number.isFinite(first.mfePct),
+    `mae $${first.mae.toFixed(2)} (${first.maePct.toFixed(2)}%) mfe $${first.mfe.toFixed(2)} (${first.mfePct.toFixed(2)}%) dur ${first.durationBars}b eqpct ${first.eqPct.toFixed(2)}%`);
+
   console.log('[3] sweep (compile once, N runs)');
   const t0 = Date.now();
   const rows = rt.sweep(comp, data, {}, { name: 'Length', values: [5, 10, 15, 20, 25, 30, 40, 60] });

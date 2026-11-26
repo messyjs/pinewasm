@@ -478,10 +478,26 @@ function fmtTime(ts) {
 }
 function renderTrades(trades) {
   const t = $('trades');
-  let html = '<tr><th>DIR</th><th>ENTRY</th><th>PX</th><th>SL</th><th>TP</th><th>EXIT</th><th>PX</th><th>PNL</th><th>WHY</th></tr>';
+  let html = '<tr><th>DIR</th><th>ENTRY</th><th>PX</th><th>SL</th><th>TP</th><th>QTY</th><th>EQ%</th><th>BARS</th><th>MAE</th><th>MFE</th><th>EXIT</th><th>PX</th><th>PNL</th><th>WHY</th></tr>';
+  const fQty = q => q >= 1000 ? q.toFixed(0) : q >= 10 ? q.toFixed(2) : q.toFixed(4);
   for (const tr of trades.slice(-200).reverse()) {
     const g = tr.pnl > 0 ? 'g' : 'r';
-    html += `<tr><td class="${g}">${tr.dir > 0 ? 'LONG' : 'SHORT'}</td><td class="d">${fmtTime(tr.entryTime)}</td><td>${tr.entryPx.toFixed(2)}</td><td class="r">${Number.isFinite(tr.sl) ? tr.sl.toFixed(2) : '-'}</td><td class="g">${Number.isFinite(tr.tp) ? tr.tp.toFixed(2) : '-'}</td><td class="d">${Number.isFinite(tr.exitTime) ? fmtTime(tr.exitTime) : '-'}</td><td>${Number.isFinite(tr.exitPx) ? tr.exitPx.toFixed(2) : '-'}</td><td class="${g}">$${tr.pnl.toFixed(2)}</td><td class="d">${tr.reason || ''}</td></tr>`;
+    const qty = Number.isFinite(tr.qty) ? fQty(tr.qty) : '-';
+    const eqPct = Number.isFinite(tr.eqPct) ? tr.eqPct.toFixed(2) + '%' : '-';
+    const bars = Number.isFinite(tr.durationBars) ? tr.durationBars : '-';
+    const mae = Number.isFinite(tr.mae) ? '$' + tr.mae.toFixed(2) : '-';
+    const mfe = Number.isFinite(tr.mfe) ? '$' + tr.mfe.toFixed(2) : '-';
+    const pnlPct = Number.isFinite(tr.pnlPct) ? tr.pnlPct.toFixed(2) + '%' : '';
+    const mins = Number.isFinite(tr.durationMs) ? (tr.durationMs / 60000) : null;
+    const durTxt = mins != null ? (mins >= 60 ? (mins / 60).toFixed(1) + 'h' : mins.toFixed(0) + 'm') : '';
+    const title = [
+      'P&L ' + (Number.isFinite(tr.pnl) ? '$' + tr.pnl.toFixed(2) : '-') + (pnlPct ? ' (' + pnlPct + ')' : ''),
+      'Entry eq $' + (Number.isFinite(tr.entryEq) ? tr.entryEq.toFixed(2) : '-') + ', size ' + qty + ' = ' + eqPct + ' of equity',
+      'MAE $' + (Number.isFinite(tr.mae) ? tr.mae.toFixed(2) : '-') + (Number.isFinite(tr.maePct) ? ' (' + tr.maePct.toFixed(2) + '%)' : '') + (Number.isFinite(tr.maeTime) ? ' @ ' + fmtTime(tr.maeTime) : ''),
+      'MFE $' + (Number.isFinite(tr.mfe) ? tr.mfe.toFixed(2) : '-') + (Number.isFinite(tr.mfePct) ? ' (' + tr.mfePct.toFixed(2) + '%)' : '') + (Number.isFinite(tr.mfeTime) ? ' @ ' + fmtTime(tr.mfeTime) : ''),
+      'Held ' + bars + ' bars' + (durTxt ? ' (' + durTxt + ')' : '')
+    ].join('\n');
+    html += `<tr title="${title}"><td class="${g}">${tr.dir > 0 ? 'LONG' : 'SHORT'}</td><td class="d">${fmtTime(tr.entryTime)}</td><td>${tr.entryPx.toFixed(2)}</td><td class="r">${Number.isFinite(tr.sl) ? tr.sl.toFixed(2) : '-'}</td><td class="g">${Number.isFinite(tr.tp) ? tr.tp.toFixed(2) : '-'}</td><td>${qty}</td><td class="d">${eqPct}</td><td class="d">${bars}</td><td class="r">${mae}</td><td class="g">${mfe}</td><td class="d">${Number.isFinite(tr.exitTime) ? fmtTime(tr.exitTime) : '-'}</td><td>${Number.isFinite(tr.exitPx) ? tr.exitPx.toFixed(2) : '-'}</td><td class="${g}">${tr.pnl.toFixed(2)}${pnlPct ? ' <span style="color:var(--text3)">' + pnlPct + '</span>' : ''}</td><td class="d">${tr.reason || ''}</td></tr>`;
   }
   t.innerHTML = html;
 }

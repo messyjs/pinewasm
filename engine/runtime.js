@@ -140,6 +140,13 @@ function makeBroker(meta, data) {
       b.o.pnl = pnl; b.o.reason = reason;
       b.o.sl = ex && ex.stop === ex.stop ? ex.stop : NaN;    // stop = stop loss
       b.o.tp = ex && ex.limit === ex.limit ? ex.limit : NaN; // limit = take profit
+      // enrichment: duration + MaE/MFe as % of entry equity; pnl% also vs entry equity
+      b.o.durationBars = bar - b.o.entryBar + 1;
+      b.o.durationMs = (data.t[bar] - b.o.entryTime) * 1000;
+      const eqBase = (b.o.entryEq === b.o.entryEq && b.o.entryEq > 0) ? b.o.entryEq : cap;
+      b.o.pnlPct = pnl / eqBase * 100;
+      b.o.maePct = b.o.mae / eqBase * 100;
+      b.o.mfePct = b.o.mfe / eqBase * 100;
       b.trades.push(b.o); b.o = null;
     }
     b.cash += pnl; b.qty = 0; b.avgPx = NaN; b.entrySid = -1;
@@ -149,7 +156,10 @@ function makeBroker(meta, data) {
     if (!(q > 0)) return;
     commission(Math.abs(q * pxl));
     b.qty = dir * q; b.avgPx = pxl; b.entrySid = sid; b.entryBar = bar;
-    b.o = { dir, entryBar: bar, entryTime: data.t[bar], entryPx: pxl, qty: q, sid };
+    const entryEq = b.cash + b.qty * pxl; // equity at entry (after entry commission)
+    b.o = { dir, entryBar: bar, entryTime: data.t[bar], entryPx: pxl, qty: q, sid,
+      entryEq, eqPct: q * pxl / (entryEq > 0 ? entryEq : 1) * 100,
+      mae: 0, mfe: 0, maeBar: -1, mfeBar: -1 };
     b.exits.set(sid, { stop: NaN, limit: NaN });
   };
   return {
@@ -198,6 +208,17 @@ function makeBroker(meta, data) {
     },
     mark: (bar) => {
       b.equity.push(b.cash + b.qty * data.c[bar]);
+      // per-trade excursion while position is open (bar ranges)
+      if (b.qty !== 0 && b.o) {
+        const dir = Math.sign(b.qty), q = Math.abs(b.qty);
+        // position closed intrabar in step leaves qty 0 -> mark skips that (partial) bar
+        const worstPx = dir > 0 ? data.l[bar] : data.h[bar];
+        const bestPx = dir > 0 ? data.h[bar] : data.l[bar];
+        const adv = dir * (worstPx - b.avgPx) * q;
+        const fav = dir * (bestPx - b.avgPx) * q;
+        if (adv < b.o.mae) { b.o.mae = adv; b.o.maeBar = bar; b.o.maeTime = data.t[bar]; }
+        if (fav > b.o.mfe) { b.o.mfe = fav; b.o.mfeBar = bar; b.o.mfeTime = data.t[bar]; }
+      }
     },
     finish: () => {
       const last = data.c.length - 1;

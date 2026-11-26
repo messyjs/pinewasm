@@ -197,6 +197,13 @@ class Broker:
             ex = self.exits.get(self.entry_sid) or {'stop': NAN, 'limit': NAN}
             self.open_trade.update(exitBar=bar, exitPx=pxl, exitTime=self.T[bar], pnl=pnl, reason=reason,
                                    sl=ex['stop'], tp=ex['limit'])
+            ot = self.open_trade
+            ot['durationBars'] = bar - ot['entryBar'] + 1
+            ot['durationMs'] = (self.T[bar] - ot['entryTime']) * 1000.0
+            eq_base = ot['entry_eq'] if ot.get('entry_eq') and ot['entry_eq'] > 0 else self.capital
+            ot['pnlPct'] = pnl / eq_base * 100.0
+            ot['maePct'] = ot.get('mae', 0.0) / eq_base * 100.0
+            ot['mfePct'] = ot.get('mfe', 0.0) / eq_base * 100.0
             self.trades.append(self.open_trade)
             self.open_trade = None
         self.cash += pnl
@@ -218,7 +225,10 @@ class Broker:
         self.qty = d * q
         self.avg = pxl
         self.entry_sid = sid
-        self.open_trade = dict(dir=d, entryBar=bar, entryTime=self.T[bar], entryPx=pxl, qty=q, sid=sid)
+        entry_eq = self.cash + self.qty * pxl  # equity at entry (after entry commission)
+        self.open_trade = dict(dir=d, entryBar=bar, entryTime=self.T[bar], entryPx=pxl, qty=q, sid=sid,
+                               entry_eq=entry_eq, eqPct=q * pxl / (entry_eq if entry_eq > 0 else 1.0) * 100.0,
+                               mae=0.0, mfe=0.0, maeBar=-1, mfeBar=-1)
         self.exits[sid] = {'stop': NAN, 'limit': NAN}
 
     def entry(self, bar, sid, d, qty=None):
@@ -278,6 +288,16 @@ class Broker:
 
     def mark(self, bar):
         self.equity.append(self.cash + self.qty * self.C[bar])
+        ot = self.open_trade
+        if self.qty != 0 and ot is not None:
+            d = 1 if self.qty > 0 else -1
+            q = abs(self.qty)
+            worst_px = self.L[bar] if d > 0 else self.H[bar]
+            best_px = self.H[bar] if d > 0 else self.L[bar]
+            adv = d * (worst_px - self.avg) * q
+            fav = d * (best_px - self.avg) * q
+            if adv < ot.get('mae', 0.0): ot['mae'] = adv; ot['maeBar'] = bar; ot['maeTime'] = self.T[bar]
+            if fav > ot.get('mfe', 0.0): ot['mfe'] = fav; ot['mfeBar'] = bar; ot['mfeTime'] = self.T[bar]
 
     def finish(self):
         last = len(self.C) - 1
@@ -821,9 +841,13 @@ def main():
             import csv
             with open(a.trades_csv, 'w', newline='') as f:
                 w = csv.writer(f)
-                w.writerow(['dir','entryTime','entryPx','qty','sl','tp','exitTime','exitPx','pnl','reason'])
+                w.writerow(['dir','entryTime','entryPx','qty','eqPct','sl','tp','exitTime','exitPx','pnl','pnlPct','mae','mfe','durBars','durMin','reason'])
                 for t in r['broker'].trades:
-                    w.writerow([t['dir'], t['entryTime'], t['entryPx'], t['qty'], t.get('sl'), t.get('tp'), t.get('exitTime'), t.get('exitPx'), round(t.get('pnl', 0.0), 6), t.get('reason')])
+                    w.writerow([t['dir'], t['entryTime'], t['entryPx'], t['qty'],
+                                round(t.get('eqPct', 0.0), 3), t.get('sl'), t.get('tp'), t.get('exitTime'), t.get('exitPx'),
+                                round(t.get('pnl', 0.0), 6), round(t.get('pnlPct', 0.0), 3),
+                                round(t.get('mae', 0.0), 6), round(t.get('mfe', 0.0), 6),
+                                t.get('durationBars'), round(t.get('durationMs', 0.0) / 60000.0, 1), t.get('reason')])
         return
     # live: rolling window per bar
     last_fired_bar = -1

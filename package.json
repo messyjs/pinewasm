@@ -7,7 +7,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node tests/test_engine.mjs"
+    "test": "node tests/test_engine.js"
   },
   "devDependencies": {
     "electron": "^36.9.5"
