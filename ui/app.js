@@ -385,7 +385,7 @@ function setupSplitters() {
 async function doRun() {
   setPill('COMPILING', 'busy');
   try {
-    const res = await window.pw.run({ src: editor.value, dataSpec, inputs: lastInputs || {} });
+    const res = await window.pw.run({ src: editor.value, dataSpec, inputs: lastInputs || {}, metaOverride: (typeof qtyOverride === 'number' ? { default_qty_value: qtyOverride } : null) });
     if (!res.ok) {
       logErrors(res);
       setPill('ERRORS', 'err');
@@ -479,6 +479,7 @@ $('btnSweepRun').onclick = async () => {
   const ms = (performance.now() - t0).toFixed(0);
   $('sweepHead').style.display = '';
   $('sweepWrap').style.display = '';
+  switchTab('sweep');
   $('sweepName').textContent = `[${name}] ${values.length} runs in ${ms}ms (compile once)`;
   let best = null;
   for (const r of res.rows) if (!best || r.stats.netProfitPct > best.stats.netProfitPct) best = r;
@@ -490,6 +491,70 @@ $('btnSweepRun').onclick = async () => {
   $('sweepTbl').innerHTML = html;
   setPill('SWEEP DONE', 'ok');
 };
+
+/* ---------- panels + quant chat ---------- */
+function switchTab(t) {
+  const map = { trades: ['paneTrades', 'tabBtnTrades'], sweep: ['paneSweep', 'tabBtnSweep'], quant: ['paneQuant', 'tabBtnQuant'] };
+  for (const key of Object.keys(map)) {
+    $(map[key][0]).classList.toggle('hidden', key !== t);
+    $(map[key][1]).classList.toggle('on', key === t);
+  }
+}
+document.querySelectorAll('.qtab').forEach(b => { b.onclick = () => switchTab(b.dataset.t); });
+
+let qtyOverride = null;
+let pendingApply = null;
+function chatMsg(role, text, withApply) {
+  const log = $('chatLog');
+  const d = document.createElement('div');
+  d.className = 'chat-m ' + (role === 'quant' ? 'q' : 'you');
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = role === 'quant' ? 'QUANT:' : 'YOU:';
+  const txt = document.createElement('div');
+  txt.className = 'txt';
+  txt.textContent = text;
+  d.appendChild(who);
+  d.appendChild(txt);
+  if (withApply) {
+    const row = document.createElement('div');
+    row.className = 'applyRow';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-green';
+    btn.textContent = 'APPLY';
+    btn.onclick = () => {
+      if (!pendingApply) return;
+      lastInputs = Object.assign({}, pendingApply.inputs);
+      qtyOverride = typeof pendingApply.qty === 'number' ? pendingApply.qty : null;
+      const kv = Object.entries(lastInputs).map(([k2, v]) => k2 + '=' + v).join(', ');
+      chatMsg('you', 'applied ' + (kv ? kv : 'signal inputs unchanged') + (qtyOverride != null ? ' | sizing ' + qtyOverride + '%' : ''));
+      showPage('compiler');
+      doRun();
+    };
+    row.appendChild(btn);
+    d.appendChild(row);
+  }
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function quantSend(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  chatMsg('you', text);
+  $('chatInput').value = '';
+  setPill('QUANT THINKING', 'busy');
+  switchTab('quant');
+  const res = await window.pw.quantChat({ src: editor.value, dataSpec, message: text });
+  pendingApply = res.apply || null;
+  chatMsg('quant', res.reply, !!pendingApply);
+  if (res.reply.indexOf('HIT:') === 0 || res.reply.indexOf('\nHIT:') >= 0) setPill('TARGET HIT', 'ok');
+  else if (res.reply.indexOf('CLOSEST:') >= 0) setPill('TARGET MISSED', 'err');
+  else setPill('QUANT READY', 'ok');
+}
+$('chatSend').onclick = () => quantSend($('chatInput').value);
+$('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') quantSend($('chatInput').value); });
+document.querySelectorAll('.chip').forEach(c => { c.onclick = () => quantSend(c.dataset.msg); });
 
 /* ---------- bot builder ---------- */
 $('btnBuildBot').onclick = async () => {
@@ -580,6 +645,7 @@ $('btnSample').onclick = () => {
 /* ---------- boot ---------- */
 setupChartInteractions();
 setupSplitters();
+chatMsg('quant', 'QUANT online. Give me a target and I tune inputs + position size to hit it, verifying every candidate against the WASM backtest.\nExamples:\n  max drawdown 5%\n  max dd 10% with at least 20 trades\n  stats');
 editor.value = SAMPLE;
 syncGutter();
 setPill('ENGINE IDLE');

@@ -68,6 +68,22 @@ body.dragging-y { cursor: row-resize; user-select: none; }
 #chart { width: 100%; height: 300px; display: block; background: var(--bg); cursor: grab; }
 
 .tables { padding: 8px 10px; }
+.qtabs { display: flex; gap: 6px; padding-bottom: 6px; }
+.qtab { background: var(--surface); border: 1px solid var(--border); color: var(--text2); font-size: 12px; padding: 5px 14px; cursor: pointer; border-radius: 4px; letter-spacing: 1px; }
+.qtab.on { border-color: var(--green); color: var(--green); }
+.qtab:hover { color: var(--text); }
+.tbl-pane.hidden { display: none; }
+.chat-log { height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.chat-m { margin-bottom: 10px; }
+.chat-m .who { color: var(--text3); letter-spacing: 1px; }
+.chat-m.q .who { color: var(--green); }
+.chat-m .txt { color: var(--text); }
+.chat-m .applyRow { margin-top: 6px; }
+.chat-chips { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.chip { background: var(--surface); border: 1px solid var(--border); color: var(--text2); font-size: 12px; padding: 4px 10px; cursor: pointer; border-radius: 10px; font-family: 'JetBrains Mono', monospace; }
+.chip:hover { border-color: var(--green); color: var(--green); }
+.chat-in { display: flex; gap: 6px; margin-top: 6px; }
+.chat-in input { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; font-size: 12px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; }
 .tbl-head { font-size: 12px; color: var(--text2); letter-spacing: 2px; padding: 6px 0 4px; }
 .tbl-scroll { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
 .tbl-scroll.sm { max-height: 180px; }

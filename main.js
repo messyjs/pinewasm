@@ -73,12 +73,12 @@ ipcMain.handle('compile', async (_e, src) => {
 });
 
 ipcMain.handle('run', async (_e, payload) => {
-  const { src, dataSpec, inputs } = payload;
+  const { src, dataSpec, inputs, metaOverride } = payload;
   try {
     const comp = await getCompiled(src);
     if (!comp.ok) return { ok: false, errs: comp.errs, warns: comp.warns };
     const data = loadData(dataSpec);
-    const r = rt.runBacktest(comp, data, inputs || {});
+    const r = rt.runBacktest(comp, data, inputs || {}, metaOverride || null);
     return {
       ok: true, stats: r.stats, trades: r.trades,
       equity: downsample(r.equity, 2000),
@@ -101,6 +101,49 @@ ipcMain.handle('sweep', async (_e, payload) => {
     const rows = rt.sweep(comp, data, inputs || {}, { name, values });
     return { ok: true, rows };
   } catch (ex) { return { ok: false, errs: [{ line: 0, msg: 'sweep: ' + ex.message }] }; }
+});
+
+ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
+  try {
+    const comp = await getCompiled(src);
+    if (!comp.ok) {
+      return { reply: 'The script has compile errors - fix those first:\n' +
+        (comp.errs || []).map(e => 'L' + e.line + ': ' + e.msg).join('\n') };
+    }
+    if (!comp.meta || !comp.meta.isStrategy) {
+      return { reply: 'This is an indicator, not a strategy. The QUANT tunes strategies (entries/exits/sizing). Load a strategy script and try again.' };
+    }
+    const data = loadData(dataSpec);
+    const q = require('./engine/quant');
+    const Q = Object.assign({}, q.parseGoal(message), { __msg: message });
+    if (Q.intent === 'help' || Q.intent === 'unknown') return { reply: q.helpText(Q) };
+    const baseRun = rt.runBacktest(comp, data, {}, null);
+    const eq = baseRun.equity;
+    if (Q.intent === 'stats') {
+      const win = q.biggestDDWindow(eq, eq.length);
+      const sh = q.sharpeOf(eq, data);
+      const f = new Date(data.t[win.from] * 1000).toISOString().slice(0, 10);
+      const t2 = new Date(data.t[win.to] * 1000).toISOString().slice(0, 10);
+      return { reply: `CURRENT (${data.c.length} bars)\n${q.statsLine(baseRun.stats)}\n` +
+        `sharpe ~${sh ? sh.toFixed(2) : '-'}\nworst drawdown ${win.pct.toFixed(2)}% - peak ${f} -> trough ${t2}\n\n` +
+        `Give me a target like "max drawdown 5%" and I optimize.` };
+    }
+    const res = await q.tune(comp, data, Q);
+    const b = res.best;
+    let reply = `TARGET: ${q.targetLine(Q)}\n`;
+    reply += `BASELINE: ${q.statsLine(res.baseline.stats)}\n`;
+    reply += (res.achieved ? 'HIT:     ' : 'CLOSEST: ') + `${q.statsLine(b.stats)}\n`;
+    reply += `CHANGED: ${q.changesLine(res.baseline, b, res.knobs)}\n`;
+    reply += `${res.runs} backtests in ${(res.ms / 1000).toFixed(1)}s (compile paid once)\n`;
+    if (res.achieved && Q.ddMax != null) {
+      reply += `\nDD margin vs target: ${(Q.ddMax - b.stats.maxDDPct).toFixed(2)}%. Hit APPLY to load these settings into the chart.`;
+    } else if (res.achieved) {
+      reply += `\nHit APPLY to load these settings into the chart.`;
+    } else {
+      reply += `\nCould not reach every target by tuning inputs + sizing alone on this dataset. Relax a constraint, or ask for M2 levers (hard per-trade stop, regime filter).`;
+    }
+    return { reply, apply: { inputs: b.inputs, qty: b.qty } };
+  } catch (ex) { return { reply: 'quant error: ' + ex.message }; }
 });
 
 ipcMain.handle('fetch-klines', async (_e, { symbol, bar, limit }) => {

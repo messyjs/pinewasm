@@ -272,12 +272,12 @@ function buildMemory(comp, data, nbars, inputValues) {
   const pages = Math.ceil(bytesNeeded / 65536) + 1;
   const mem = new WebAssembly.Memory({ initial: pages, maximum: pages });
   const F = new Float64Array(mem.buffer);
-  // params
+  // params - keyed by input title (compile-time deduped)
   for (let i = 0; i < lay.nParams; i++) {
     const inp = comp.inputs.find(x => x.idx === i);
-    F[i] = (inputValues && inputValues[inp && inp.name || i] !== undefined)
-      ? Number(inputValues[inp && inp.name || i])
-      : ((inp && inp.defval) || 0);
+    const key = inp ? inp.title : String(i);
+    const v = (inputValues && inp && inputValues[key] !== undefined) ? Number(inputValues[key]) : ((inp && inp.defval) || 0);
+    F[i] = Number.isFinite(v) ? v : 0;
   }
   // ohlcv (+hl2)
   const base = lay.dataBase >> 3;
@@ -303,8 +303,9 @@ function zeroSeries(mem, comp, nbars) {
   F.fill(0, start, start + len);
 }
 
-function makeInstance(comp, mem, data, nbars) {
-  const broker = makeBroker(comp.meta, data);
+function makeInstance(comp, mem, data, nbars, metaOverride) {
+  const meta = metaOverride ? Object.assign({}, comp.meta, metaOverride) : comp.meta;
+  const broker = makeBroker(meta, data);
   const states = new Map();
   const ta = makeTa(mem, states);
   // tr + atr need OHLC: wrap with memory view
@@ -362,15 +363,16 @@ function makeInstance(comp, mem, data, nbars) {
   return { inst, broker, plots, shapeArr };
 }
 
-function runBacktest(comp, data, inputValues) {
+function runBacktest(comp, data, inputValues, metaOverride) {
   const nbars = data.c.length;
+  const meta = metaOverride ? Object.assign({}, comp.meta, metaOverride) : comp.meta;
   const mem = buildMemory(comp, data, nbars, inputValues);
-  const { inst, broker, plots, shapeArr } = makeInstance(comp, mem, data, nbars);
+  const { inst, broker, plots, shapeArr } = makeInstance(comp, mem, data, nbars, metaOverride);
   const t0 = Date.now();
   inst.exports.run(nbars);
   const runMs = Date.now() - t0;
   const b = broker.finish();
-  const stats = computeStats(b, comp.meta.capital || 100000);
+  const stats = computeStats(b, meta.capital || 100000);
   return {
     ok: true, stats, trades: b.trades, equity: b.equity, plots,
     shapes: shapeArr, runMs, nbars,

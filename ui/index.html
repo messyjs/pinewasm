@@ -56,10 +56,31 @@
         <div class="chart-wrap"><canvas id="chart"></canvas><div id="goLive" class="golive hidden">LATEST</div></div>
         <div id="hsplit2" class="hsplit"></div>
         <div class="tables">
-          <div class="tbl-head">TRADES</div>
-          <div class="tbl-scroll"><table id="trades"></table></div>
-          <div class="tbl-head" id="sweepHead" style="display:none">SWEEP <span id="sweepName"></span></div>
-          <div class="tbl-scroll sm" id="sweepWrap" style="display:none"><table id="sweepTbl"></table></div>
+          <div class="qtabs">
+            <button class="qtab on" id="tabBtnTrades" data-t="trades">TRADES</button>
+            <button class="qtab" id="tabBtnSweep" data-t="sweep">SWEEP</button>
+            <button class="qtab" id="tabBtnQuant" data-t="quant">QUANT</button>
+          </div>
+          <div id="paneTrades" class="tbl-pane">
+            <div class="tbl-scroll"><table id="trades"></table></div>
+          </div>
+          <div id="paneSweep" class="tbl-pane hidden">
+            <div class="tbl-head" id="sweepHead" style="display:none">SWEEP <span id="sweepName"></span></div>
+            <div class="tbl-scroll sm" id="sweepWrap"><table id="sweepTbl"></table></div>
+          </div>
+          <div id="paneQuant" class="tbl-pane hidden">
+            <div id="chatLog" class="chat-log"></div>
+            <div class="chat-chips">
+              <button class="chip" data-msg="max drawdown 5%">MAX DD 5%</button>
+              <button class="chip" data-msg="max drawdown 10% with at least 20 trades">MAX DD 10% / 20 TRADES</button>
+              <button class="chip" data-msg="stats">STATS</button>
+              <button class="chip" data-msg="help">HELP</button>
+            </div>
+            <div class="chat-in">
+              <input id="chatInput" placeholder="e.g. get max drawdown to 5%">
+              <button id="chatSend" class="btn btn-green">SEND</button>
+            </div>
+          </div>
         </div>
         <div id="sweepPanel" class="sweep-panel hidden">
           <label>INPUT</label><select id="sweepInput"></select>
