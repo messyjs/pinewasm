@@ -105,6 +105,8 @@ function clampView(n) {
 function chartCW() { return Math.max(100, $('chart').width - 64); }
 
 let priceZoom = 1; // vertical scale (TV-style price axis drag)
+let lastPM = null;       // last drawn price mapping {yLo, yHi, padT, candleH}
+let manualScale = null;  // TV behavior: axis wheel/drag fixes the price scale until dblclick-fit / new run
 
 function drawChart(res) {
   if (!res || !res.c.length) return;
@@ -153,10 +155,16 @@ function drawChart(res) {
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi === lo) { hi = (lo === hi ? lo + 1 : hi + 1); lo -= 1; }
   const pspan = (hi - lo) || 1;
   lo -= pspan * 0.04; hi += pspan * 0.04;
-  // TV-style vertical scaling: price axis drag zooms around the middle
-  const mid = (lo + hi) / 2;
-  const yLo = mid - ((mid - lo) / priceZoom);
-  const yHi = mid + ((hi - mid) / priceZoom);
+  // TV-style vertical scaling: auto range scaled by priceZoom around its middle;
+  // manualScale (set by price-axis wheel/drag) freezes the scale like TV does
+  let yLo, yHi;
+  if (manualScale) { yLo = manualScale.lo; yHi = manualScale.hi; }
+  else {
+    const mid = (lo + hi) / 2;
+    yLo = mid - ((mid - lo) / priceZoom);
+    yHi = mid + ((hi - mid) / priceZoom);
+  }
+  lastPM = { yLo, yHi, padT, candleH };
   const Y = price => padT + (1 - (price - yLo) / (yHi - yLo)) * (candleH - padT - 4);
   const X = bar => ((bar - view.start) / span) * (cw - 2) + 1;
   // grid
@@ -310,6 +318,14 @@ function setupChartInteractions() {
     e.preventDefault();
     if (!lastRes) return;
     const n = nOf();
+    const rect = cv.getBoundingClientRect();
+    const ax = e.clientX - rect.left, ay = e.clientY - rect.top;
+    // TV parities: wheel over the price axis zooms the price scale (cursor-anchored);
+    // wheel over the time axis strip or chart body zooms time (cursor-anchored)
+    if (ax > cv.width - 64 && ay <= cv.height - 18 && !e.shiftKey) {
+      zoomPrice(Math.pow(1.25, e.deltaY / 100), ay);
+      return;
+    }
     if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       // shift+wheel or trackpad horizontal: pan
       const dBar = (e.deltaX || e.deltaY) / 5;
@@ -318,13 +334,34 @@ function setupChartInteractions() {
       drawChart(lastRes);
       return;
     }
-    const rect = cv.getBoundingClientRect();
-    const ax = e.clientX - rect.left;
     const frac = Math.min(1, Math.max(0, (ax - 1) / chartCW()));
     const factor = Math.pow(1.25, e.deltaY / 100);
     const pinned = view.end >= n - 1.5;
     zoomTime(frac, factor, pinned);
   }, { passive: false });
+
+  // cursor hints like TV: ns-resize over price axis, ew-resize over time axis
+  cv.addEventListener('mousemove', (e) => {
+    const rect = cv.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    if (x > cv.width - 64 && y <= cv.height - 18) cv.style.cursor = 'ns-resize';
+    else if (y > cv.height - 18 && x <= cv.width - 64) cv.style.cursor = 'ew-resize';
+    else cv.style.cursor = '';
+  });
+
+  // cursor-anchored price-scale zoom (TV wheel-on-axis feel)
+  function zoomPrice(f, yPx) {
+    if (!lastPM || !Number.isFinite(f) || f <= 0) return;
+    const H2 = Math.max(1, lastPM.candleH - lastPM.padT - 4);
+    const r = Math.min(1, Math.max(0, (yPx - lastPM.padT) / H2));
+    const pA = lastPM.yLo + (1 - r) * (lastPM.yHi - lastPM.yLo); // price under cursor
+    const Rold = Math.max(1e-9, lastPM.yHi - lastPM.yLo);
+    let R = Rold / f;
+    R = Math.min(Math.max(R, 1e-9), Rold * 20); // sane bounds per gesture
+    manualScale = { lo: pA - (1 - r) * R, hi: pA - (1 - r) * R + R };
+    lastCanvasKey = '';
+    drawChart(lastRes);
+  }
 
   let drag = null;
   cv.addEventListener('mousedown', (e) => {
@@ -332,7 +369,14 @@ function setupChartInteractions() {
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     drag = null;
-    if (x > cv.width - 64) drag = { kind: 'price', y0: y, k0: priceZoom };
+    if (x > cv.width - 64 && y <= cv.height - 18) {
+      if (!lastPM) return;
+      const H2 = Math.max(1, lastPM.candleH - lastPM.padT - 4);
+      const r0 = Math.min(1, Math.max(0, (y - lastPM.padT) / H2));
+      drag = { kind: 'price', y0: y, r0,
+        pA: lastPM.yLo + (1 - r0) * (lastPM.yHi - lastPM.yLo),
+        lo0: lastPM.yLo, hi0: lastPM.yHi };
+    }
     else if (y > cv.height - 18 && x <= cv.width - 64) drag = { kind: 'time', x0: x, s0: view.end - view.start, frac: Math.min(1, Math.max(0, (x - 1) / chartCW())) };
     else drag = { kind: 'pan', x0: x, s0: view.start, e0: view.end };
     e.preventDefault();
@@ -349,7 +393,11 @@ function setupChartInteractions() {
       clampView(n);
       drawChart(lastRes);
     } else if (drag.kind === 'price') {
-      priceZoom = Math.min(8, Math.max(0.2, drag.k0 * Math.exp((y - drag.y0) / 60.0)));
+      // TV feel: price under the grab point follows the cursor; drag down = zoom out
+      const R0 = Math.max(1e-9, drag.hi0 - drag.lo0);
+      let R = R0 * Math.exp((y - drag.y0) / 60.0);
+      R = Math.min(Math.max(R, R0 / 20), R0 * 20);
+      manualScale = { lo: drag.pA - (1 - drag.r0) * R, hi: drag.pA - (1 - drag.r0) * R + R };
       lastCanvasKey = '';
       drawChart(lastRes);
     } else if (drag.kind === 'time') {
@@ -362,10 +410,12 @@ function setupChartInteractions() {
       drawChart(lastRes);
     }
   });
-  window.addEventListener('mouseup', () => { drag = null; });  cv.addEventListener('dblclick', () => {
+  window.addEventListener('mouseup', () => { drag = null; });
+  cv.addEventListener('dblclick', () => {
     if (!lastRes) return;
     viewFit(lastRes.c.length);
     priceZoom = 1;
+    manualScale = null;
     lastCanvasKey = '';
     drawChart(lastRes);
   });
@@ -437,6 +487,7 @@ async function doRun() {
     lastInputs = null;
     lastRes = res;
     priceZoom = 1;
+    manualScale = null;
     viewFit(res.c.length);
     lastCanvasKey = ''; // force redraw after new run
     renderStats(res);
