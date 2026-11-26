@@ -34,9 +34,9 @@ plot(basis, "Basis", color=color.gray)
 plot(upper, "Upper", color=color.green)
 plot(lower, "Lower", color=color.red)
 if strategy.position_size > 0
-    strategy.exit("XL", "Long", stop=strategy.position_avg_price * 0.97, limit=strategy.position_avg_price * 1.06)
+    strategy.exit("XL", "Long", stop=strategy.position_avg_price * 0.98, limit=strategy.position_avg_price * 1.03)
 if strategy.position_size < 0
-    strategy.exit("XS", "Short", stop=strategy.position_avg_price * 1.03, limit=strategy.position_avg_price * 0.94)
+    strategy.exit("XS", "Short", stop=strategy.position_avg_price * 1.02, limit=strategy.position_avg_price * 0.97)
 
 `;
 
@@ -439,6 +439,9 @@ async function doRun() {
     drawChart(res);
     renderTrades(res.trades);
     log(`OK wasm=${res.wasmSize ? res.wasmSize : ''}B bars=${res.nbars} compile=${res.compileMs}ms run=${res.runMs}ms net=${res.stats.netProfit.toFixed(2)} trades=${res.stats.trades}`, 'ok');
+    const mixC = {};
+    for (const t of res.trades) mixC[t.reason] = (mixC[t.reason] || 0) + 1;
+    log(`exits: ${Object.entries(mixC).map(([k2, v]) => v + ' ' + k2).join(' / ')}`, 'dim');
     if (res.meta.isStrategy) setPill('WASM READY', 'ok');
     else setPill('INDICATOR RUN', 'ok');
   } catch (ex) {

@@ -45,12 +45,14 @@ function genSample(n = 3000, seed = 42) {
     if (--regimeLeft <= 0) { regime = rnd() < 0.5 ? 1 : (rnd() < 0.5 ? -1 : 0); regimeLeft = 150 + Math.floor(rnd() * 300); }
     const drift = regime * 0.0006;
     const mr = (100 - px) * 0.002;
-    const ret = drift + mr + (rnd() - 0.5) * 0.012;
+    // occasional 2-4% shock bars (news candles) so stops/losses exist
+    const shock = rnd() < 0.02 ? (rnd() < 0.5 ? -1 : 1) * (0.02 + rnd() * 0.02) : 0;
+    const ret = drift + mr + (rnd() - 0.5) * 0.012 + shock;
     const open = px;
     const close = px * (1 + ret);
-    const hi = Math.max(open, close) * (1 + rnd() * 0.004);
-    const lo = Math.min(open, close) * (1 - rnd() * 0.004);
-    const vol = 500 + rnd() * 1500;
+    const hi = Math.max(open, close) * (1 + rnd() * 0.006 + Math.abs(shock) * 0.4);
+    const lo = Math.min(open, close) * (1 - rnd() * 0.006 - Math.abs(shock) * 0.4);
+    const vol = 500 + rnd() * 1500 + (shock ? 5000 : 0);
     T.push(t0 + k * 900); O.push(open); H.push(hi); L.push(lo); C.push(close); V.push(vol);
     px = close;
   }

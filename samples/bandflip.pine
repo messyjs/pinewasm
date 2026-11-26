@@ -28,9 +28,9 @@ if shortCond
     strategy.entry("Short", strategy.short)
 
 if strategy.position_size > 0
-    strategy.exit("XL", "Long", stop=strategy.position_avg_price * 0.97, limit=strategy.position_avg_price * 1.06)
+    strategy.exit("XL", "Long", stop=strategy.position_avg_price * 0.98, limit=strategy.position_avg_price * 1.03)
 if strategy.position_size < 0
-    strategy.exit("XS", "Short", stop=strategy.position_avg_price * 1.03, limit=strategy.position_avg_price * 0.94)
+    strategy.exit("XS", "Short", stop=strategy.position_avg_price * 1.02, limit=strategy.position_avg_price * 0.97)
 
 plot(basis, "Basis", color=color.gray)
 plot(upper, "Upper", color=color.green)

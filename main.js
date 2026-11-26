@@ -122,11 +122,14 @@ ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
     if (Q.intent === 'stats') {
       const win = q.biggestDDWindow(eq, eq.length);
       const sh = q.sharpeOf(eq, data);
+      const cnt = {};
+      for (const t of baseRun.trades) cnt[t.reason] = (cnt[t.reason] || 0) + 1;
+      const mix = Object.entries(cnt).map(([k2, v]) => v + ' ' + k2).join(' / ') || 'no trades';
       const f = new Date(data.t[win.from] * 1000).toISOString().slice(0, 10);
       const t2 = new Date(data.t[win.to] * 1000).toISOString().slice(0, 10);
       return { reply: `CURRENT (${data.c.length} bars)\n${q.statsLine(baseRun.stats)}\n` +
-        `sharpe ~${sh ? sh.toFixed(2) : '-'}\nworst drawdown ${win.pct.toFixed(2)}% - peak ${f} -> trough ${t2}\n\n` +
-        `Give me a target like "max drawdown 5%" and I optimize.` };
+        `exits: ${mix}\nsharpe ~${sh ? sh.toFixed(2) : '-'}\nworst drawdown ${win.pct.toFixed(2)}% - peak ${f} -> trough ${t2}\n\n` +
+        `Note: if all exits are "close"/"limit" and none "stop", a 100% win rate here is structural -\nyour script exits winners by design and the stop never gets touched. Give me a target and I optimize.` };
     }
     const res = await q.tune(comp, data, Q);
     const b = res.best;

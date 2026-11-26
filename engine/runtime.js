@@ -183,6 +183,7 @@ function makeBroker(meta, data) {
       // 2) intrabar exits
       if (b.qty !== 0) {
         const ex = b.exits.get(b.entrySid);
+        if (process.env.PW_DEBUG && bar > 230 && bar < 250) console.error('DBG check bar=' + bar + ' entrySid=' + b.entrySid + ' stop=' + (ex && ex.stop) + ' limit=' + (ex && ex.limit) + ' H=' + data.h[bar].toFixed(2) + ' L=' + data.l[bar].toFixed(2));
         if (ex) {
           const dir = Math.sign(b.qty);
           if (dir > 0) {
