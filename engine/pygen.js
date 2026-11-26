@@ -194,7 +194,9 @@ class Broker:
         pnl = d * (pxl - self.avg) * q
         self._commission(abs(q * pxl))
         if self.open_trade:
-            self.open_trade.update(exitBar=bar, exitPx=pxl, exitTime=self.T[bar], pnl=pnl, reason=reason)
+            ex = self.exits.get(self.entry_sid) or {'stop': NAN, 'limit': NAN}
+            self.open_trade.update(exitBar=bar, exitPx=pxl, exitTime=self.T[bar], pnl=pnl, reason=reason,
+                                   sl=ex['stop'], tp=ex['limit'])
             self.trades.append(self.open_trade)
             self.open_trade = None
         self.cash += pnl
@@ -382,9 +384,15 @@ class PyEmitter {
       case 'str': return pyStr(e.v);
       case 'enum': {
         const d = dottedName(e);
+        const eid = enumIdent(d);
+        if (eid) return eid;
+        const dv = valOfEnum(d);
+        if (dv !== null) return String(dv);
         if (d === 'math.pi') return 'math.pi';
         if (d === 'math.e') return 'math.e';
-        return String(valOfEnum(d));
+        const colormap = { red: 0, green: 1, blue: 2, white: 3, gray: 4, grey: 4, lime: 1, orange: 1, maroon: 0, aqua: 2, teal: 2, navy: 2, yellow: 3, silver: 4, purple: 4, fuchsia: 4, black: 3 };
+        if (/^color\./.test(d)) return String(colormap[d.split('.')[1]] ?? 4);
+        return '0.0';
       }
       case 'neg': return `(-${this.expr(e.e, pre)})`;
       case 'not': return `(0.0 if truthy(${this.expr(e.e, pre)}) else 1.0)`;
@@ -630,7 +638,8 @@ class PyEmitter {
     }
     if (name === 'strategy.exit') {
       const sid = this.strId(e.args[0]);
-      const fromSid = e.kw.from_entry ? this.strId(e.kw.from_entry) : sid;
+      const fromExpr = (e.kw && e.kw.from_entry) || (e.args && e.args[1]);
+      const fromSid = fromExpr ? this.strId(fromExpr) : sid;
       const stop = e.kw.stop ? this.expr(e.kw.stop, pre) : 'NAN';
       const limit = e.kw.limit ? this.expr(e.kw.limit, pre) : 'NAN';
       this.emit(pad + `broker.exit_(bar, ${sid}, ${fromSid}, ${stop}, ${limit})`);
@@ -670,8 +679,12 @@ function pyJson(obj) {
 function valOfEnum(d) {
   const m = { 'strategy.long': 1, 'strategy.short': -1 };
   if (m[d] !== undefined) return m[d];
-  if (/^color\./.test(d)) { const map = { red: 0, green: 1, blue: 2, white: 3, gray: 4, grey: 4, lime: 1, orange: 1, maroon: 0, aqua: 2, teal: 2, navy: 2, yellow: 3, silver: 4, purple: 4, fuchsia: 4, black: 3 }; return map[d.split('.')[1]] ?? 4; }
-  return 0;
+  return null;
+}
+function enumIdent(d) {
+  if (d === 'strategy.position_size') return 'broker.pos()';
+  if (d === 'strategy.position_avg_price') return 'broker.avgp()';
+  return null;
 }
 function constVal(e) {
   if (e.k === 'num') return e.v;
@@ -808,9 +821,9 @@ def main():
             import csv
             with open(a.trades_csv, 'w', newline='') as f:
                 w = csv.writer(f)
-                w.writerow(['dir','entryTime','entryPx','qty','exitTime','exitPx','pnl','reason'])
+                w.writerow(['dir','entryTime','entryPx','qty','sl','tp','exitTime','exitPx','pnl','reason'])
                 for t in r['broker'].trades:
-                    w.writerow([t['dir'], t['entryTime'], t['entryPx'], t['qty'], t.get('exitTime'), t.get('exitPx'), round(t.get('pnl', 0.0), 6), t.get('reason')])
+                    w.writerow([t['dir'], t['entryTime'], t['entryPx'], t['qty'], t.get('sl'), t.get('tp'), t.get('exitTime'), t.get('exitPx'), round(t.get('pnl', 0.0), 6), t.get('reason')])
         return
     # live: rolling window per bar
     last_fired_bar = -1

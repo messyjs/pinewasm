@@ -135,8 +135,11 @@ function makeBroker(meta, data) {
     const pnl = dir * (pxl - b.avgPx) * q;
     commission(Math.abs(q * pxl));
     if (b.o) {
+      const ex = b.exits.get(b.entrySid);
       b.o.exitBar = bar; b.o.exitPx = pxl; b.o.exitTime = data.t[bar];
       b.o.pnl = pnl; b.o.reason = reason;
+      b.o.sl = ex && ex.stop === ex.stop ? ex.stop : NaN;    // stop = stop loss
+      b.o.tp = ex && ex.limit === ex.limit ? ex.limit : NaN; // limit = take profit
       b.trades.push(b.o); b.o = null;
     }
     b.cash += pnl; b.qty = 0; b.avgPx = NaN; b.entrySid = -1;

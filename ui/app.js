@@ -33,6 +33,11 @@ if shortCond
 plot(basis, "Basis", color=color.gray)
 plot(upper, "Upper", color=color.green)
 plot(lower, "Lower", color=color.red)
+if strategy.position_size > 0
+    strategy.exit("XL", "Long", stop=strategy.position_avg_price * 0.97, limit=strategy.position_avg_price * 1.06)
+if strategy.position_size < 0
+    strategy.exit("XS", "Short", stop=strategy.position_avg_price * 1.03, limit=strategy.position_avg_price * 0.94)
+
 `;
 
 let dataSpec = { source: 'sample', n: 3000 };
@@ -84,6 +89,7 @@ let lastRes = null;
 let view = { start: 0, end: 1 };
 let chartH = 300;
 let lastCanvasKey = '';
+let showLevels = true;
 
 function viewFit(n) { view.start = 0; view.end = Math.max(1, n - 1); }
 
@@ -135,6 +141,15 @@ function drawChart(res) {
       }
     }
   }
+  // include entry/TP/SL levels of visible trades in the price range
+  if (showLevels && res.trades) {
+    for (const t of res.trades) {
+      if (t.exitBar == null || t.exitBar < i0 - 1 || t.entryBar > i1 + 1) continue;
+      for (const p3 of [t.entryPx, t.sl, t.tp]) {
+        if (Number.isFinite(p3)) { if (p3 < lo) lo = p3; if (p3 > hi) hi = p3; }
+      }
+    }
+  }
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi === lo) { hi = (lo === hi ? lo + 1 : hi + 1); lo -= 1; }
   const pspan = (hi - lo) || 1;
   lo -= pspan * 0.04; hi += pspan * 0.04;
@@ -168,6 +183,30 @@ function drawChart(res) {
     const y1 = Y(Math.max(res.o[k], res.c[k]));
     const y2 = Y(Math.min(res.o[k], res.c[k]));
     ctx.fillRect(x - bw / 2, y1, bw, Math.max(1, y2 - y1));
+  }
+  // trade levels: entry (blue solid) + TP (green dashed) + SL (red dashed)
+  if (res.trades && showLevels) {
+    ctx.lineWidth = 1;
+    for (const t of res.trades) {
+      if (t.exitBar == null || Number.isNaN(t.exitBar)) continue;
+      if (t.exitBar < i0 - 1 || t.entryBar > i1 + 1) continue;
+      const x1 = Math.max(0, X(t.entryBar));
+      const x2 = Math.min(cw, X(t.exitBar));
+      const seg = (price, color, label) => {
+        if (!Number.isFinite(price) || price < yLo || price > yHi) return;
+        ctx.strokeStyle = color;
+        ctx.beginPath(); ctx.moveTo(x1, Y(price)); ctx.lineTo(x2, Y(price)); ctx.stroke();
+        if (x2 - x1 > 44) {
+          ctx.fillStyle = color;
+          ctx.fillText(label + ' ' + price.toFixed(2), Math.min(x1 + 3, cw - 60), Y(price) - 3);
+        }
+      };
+      seg(t.entryPx, '#1E90FF', 'E');
+      ctx.setLineDash([5, 3]);
+      seg(t.tp, '#32CD32', 'TP');
+      seg(t.sl, '#CE2029', 'SL');
+      ctx.setLineDash([]);
+    }
   }
   // hlines
   if (res.hlines) {
@@ -323,8 +362,7 @@ function setupChartInteractions() {
       drawChart(lastRes);
     }
   });
-  window.addEventListener('mouseup', () => { drag = null; });
-  cv.addEventListener('dblclick', () => {
+  window.addEventListener('mouseup', () => { drag = null; });  cv.addEventListener('dblclick', () => {
     if (!lastRes) return;
     viewFit(lastRes.c.length);
     priceZoom = 1;
@@ -437,10 +475,10 @@ function fmtTime(ts) {
 }
 function renderTrades(trades) {
   const t = $('trades');
-  let html = '<tr><th>DIR</th><th>ENTRY</th><th>PX</th><th>EXIT</th><th>PX</th><th>PNL</th><th>WHY</th></tr>';
+  let html = '<tr><th>DIR</th><th>ENTRY</th><th>PX</th><th>SL</th><th>TP</th><th>EXIT</th><th>PX</th><th>PNL</th><th>WHY</th></tr>';
   for (const tr of trades.slice(-200).reverse()) {
     const g = tr.pnl > 0 ? 'g' : 'r';
-    html += `<tr><td class="${g}">${tr.dir > 0 ? 'LONG' : 'SHORT'}</td><td class="d">${fmtTime(tr.entryTime)}</td><td>${tr.entryPx.toFixed(2)}</td><td class="d">${Number.isFinite(tr.exitTime) ? fmtTime(tr.exitTime) : '-'}</td><td>${Number.isFinite(tr.exitPx) ? tr.exitPx.toFixed(2) : '-'}</td><td class="${g}">$${tr.pnl.toFixed(2)}</td><td class="d">${tr.reason || ''}</td></tr>`;
+    html += `<tr><td class="${g}">${tr.dir > 0 ? 'LONG' : 'SHORT'}</td><td class="d">${fmtTime(tr.entryTime)}</td><td>${tr.entryPx.toFixed(2)}</td><td class="r">${Number.isFinite(tr.sl) ? tr.sl.toFixed(2) : '-'}</td><td class="g">${Number.isFinite(tr.tp) ? tr.tp.toFixed(2) : '-'}</td><td class="d">${Number.isFinite(tr.exitTime) ? fmtTime(tr.exitTime) : '-'}</td><td>${Number.isFinite(tr.exitPx) ? tr.exitPx.toFixed(2) : '-'}</td><td class="${g}">$${tr.pnl.toFixed(2)}</td><td class="d">${tr.reason || ''}</td></tr>`;
   }
   t.innerHTML = html;
 }
@@ -640,6 +678,14 @@ $('btnSample').onclick = () => {
   dataSpec = { source: 'sample', n: 3000 };
   $('dataLabel').textContent = 'DATA: SAMPLE 3000 BARS';
   showPage('compiler'); doRun();
+};
+
+/* showLevels toggle */
+$('btnLevels').onclick = () => {
+  showLevels = !showLevels;
+  $('btnLevels').textContent = 'LEVELS: ' + (showLevels ? 'ON' : 'OFF');
+  lastCanvasKey = '';
+  if (lastRes) drawChart(lastRes);
 };
 
 /* ---------- boot ---------- */

@@ -411,7 +411,8 @@ class Compiler {
     }
     if (name === 'strategy.exit') {
       const sid = this.strId(e.args[0]);
-      const fromSid = e.kw.from_entry ? this.strId(e.kw.from_entry) : sid;
+      const fromExpr = (e.kw && e.kw.from_entry) || (e.args && e.args[1]);
+      const fromSid = fromExpr ? this.strId(fromExpr) : sid;
       const stop = e.kw.stop ? this.compileF64(e.kw.stop) : NAN_WAT;
       const limit = e.kw.limit ? this.compileF64(e.kw.limit) : NAN_WAT;
       this.emit(`(call $e.strat_exit (local.get $bar) (i32.const ${sid}) (i32.const ${fromSid}) ${stop} ${limit})`);
@@ -455,6 +456,8 @@ class Compiler {
       case 'str': return NAN_WAT;
       case 'enum': {
         const d = dotted(e);
+        if (d === 'strategy.position_size') return '(call $e.strat_pos (local.get $bar))';
+        if (d === 'strategy.position_avg_price') return '(call $e.strat_avg (local.get $bar))';
         if (d === 'math.pi') return '(f64.const 3.141592653589793)';
         if (d === 'math.e') return '(f64.const 2.718281828459045)';
         if (ENUM_VALS[d] !== undefined) return `(f64.const ${ENUM_VALS[d]})`;
