@@ -406,6 +406,28 @@ function setupChartInteractions() {
     const n = nOf();
     const rect = cv.getBoundingClientRect();
     const ax = e.clientX - rect.left, ay = e.clientY - rect.top;
+    // LMB held (mid-drag) + wheel = NinjaTrader-style BOTH-AXIS zoom: time and value scale
+    // together, anchored at the pointer. Drag references are rebased so panning continues
+    // smoothly from the new framing without a jump.
+    if (drag) {
+      const factor = Math.pow(1.25, e.deltaY / 100);
+      const frac = Math.min(1, Math.max(0, (ax - 1) / chartCW()));
+      zoomTime(frac, factor, false);
+      zoomPrice(factor, ay);
+      rebaseDrag(drag, ax, ay);
+      return;
+    }
+    // right-hold + wheel = horizontal scroll: wheel delta translates to pixels at the
+    // current zoom (wheel down = toward newest, wheel up = older)
+    if (rightDown) {
+      const pxPerBar = Math.max(0.35, (chartCW() - 2) / Math.max(1e-6, view.end - view.start));
+      const dBar = e.deltaY / pxPerBar;
+      view.start += dBar; view.end += dBar;
+      clampView(n);
+      rightWheelAt = performance.now();
+      drawChart(lastRes);
+      return;
+    }
     // TV parities: wheel over the price axis zooms the price scale (cursor-anchored);
     // wheel over the time axis strip or chart body zooms time (cursor-anchored)
     if (ax > cv.width - 64 && ay <= cv.height - 18 && !e.shiftKey) {
@@ -427,6 +449,30 @@ function setupChartInteractions() {
     // snap back to now, or hover the right edge while zooming.
     zoomTime(frac, factor, false);
   }, { passive: false });
+
+  // rebase an active drag after a mid-drag combined zoom so continuation stays 1:1
+  function rebaseDrag(d, ax, ay) {
+    d.x0 = ax; d.y0 = ay;
+    if (d.kind === 'pan') {
+      d.s0 = view.start; d.e0 = view.end;
+      d.vm = null; // vertical reference re-freezes from the post-zoom mapping
+    } else if (d.kind === 'price' && lastPM) {
+      const H2 = Math.max(1, lastPM.candleH - lastPM.padT - 4);
+      d.r0 = Math.min(1, Math.max(0, (ay - lastPM.padT) / H2));
+      d.pA = lastPM.yLo + (1 - d.r0) * (lastPM.yHi - lastPM.yLo);
+      d.lo0 = lastPM.yLo; d.hi0 = lastPM.yHi;
+    } else if (d.kind === 'time') {
+      d.s0 = view.end - view.start;
+      d.frac = Math.min(1, Math.max(0, (ax - 1) / chartCW()));
+    }
+  }
+
+  let rightWheelAt = 0; // suppress the stray context menu right after a right-hold wheel
+  cv.addEventListener('contextmenu', (e) => { if (performance.now() - rightWheelAt < 700) e.preventDefault(); });
+  // Chromium strips held-button state from wheel events (buttons=0 even mid-drag), so
+  // right-hold is tracked from mousedown/mouseup instead of e.buttons
+  let rightDown = false;
+  window.__pwBtn = { get right() { return rightDown; } };
 
   // cursor hints like TV: ns-resize over price axis, ew-resize over time axis
   cv.addEventListener('mousemove', (e) => {
@@ -467,6 +513,7 @@ function setupChartInteractions() {
 
   let drag = null;
   cv.addEventListener('mousedown', (e) => {
+    if (e.button === 2) { rightDown = true; return; }
     if (!lastRes) return;
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -523,7 +570,7 @@ function setupChartInteractions() {
       drawChart(lastRes);
     }
   });
-  window.addEventListener('mouseup', () => { drag = null; if (cv) cv.style.cursor = ''; });
+  window.addEventListener('mouseup', (e) => { if (e.button === 2) rightDown = false; drag = null; if (cv) cv.style.cursor = ''; });
   cv.addEventListener('dblclick', () => {
     if (!lastRes) return;
     viewFit(lastRes.c.length);
