@@ -406,6 +406,24 @@ function setupChartInteractions() {
     const n = nOf();
     const rect = cv.getBoundingClientRect();
     const ax = e.clientX - rect.left, ay = e.clientY - rect.top;
+    // BOTH buttons held = magnifier scope: wheel adjusts magnification, aim with the mouse
+    if (leftDown && rightDown) {
+      e.preventDefault();
+      mag = Math.min(20, Math.max(1.5, mag * Math.pow(1.25, -e.deltaY / 100))); // wheel up = more zoom
+      drawLoupe(e);
+      return;
+    }
+    // right-hold + wheel = horizontal scroll: wheel up slides toward newest (right),
+    // wheel down toward oldest (left) - Massi direction canon (2026-11-27)
+    if (rightDown) {
+      const pxPerBar = Math.max(0.35, (chartCW() - 2) / Math.max(1e-6, view.end - view.start));
+      const dBar = -e.deltaY / pxPerBar;
+      view.start += dBar; view.end += dBar;
+      clampView(n);
+      rightWheelAt = performance.now();
+      drawChart(lastRes);
+      return;
+    }
     // LMB held (mid-drag) + wheel = NinjaTrader-style BOTH-AXIS zoom: time and value scale
     // together, anchored at the pointer. Drag references are rebased so panning continues
     // smoothly from the new framing without a jump.
@@ -417,17 +435,6 @@ function setupChartInteractions() {
       rebaseDrag(drag, ax, ay);
       return;
     }
-    // right-hold + wheel = horizontal scroll: wheel delta translates to pixels at the
-    // current zoom (wheel down = toward newest, wheel up = older)
-    if (rightDown) {
-      const pxPerBar = Math.max(0.35, (chartCW() - 2) / Math.max(1e-6, view.end - view.start));
-      const dBar = e.deltaY / pxPerBar;
-      view.start += dBar; view.end += dBar;
-      clampView(n);
-      rightWheelAt = performance.now();
-      drawChart(lastRes);
-      return;
-    }
     // TV parities: wheel over the price axis zooms the price scale (cursor-anchored);
     // wheel over the time axis strip or chart body zooms time (cursor-anchored)
     if (ax > cv.width - 64 && ay <= cv.height - 18 && !e.shiftKey) {
@@ -435,8 +442,8 @@ function setupChartInteractions() {
       return;
     }
     if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-      // shift+wheel or trackpad horizontal: pan
-      const dBar = (e.deltaX || e.deltaY) / 5;
+      // shift+wheel or trackpad horizontal: pan (scroll up slides toward newest, matching the right-hold canon)
+      const dBar = -((e.deltaX || e.deltaY) / 5);
       view.start += dBar; view.end += dBar;
       clampView(n);
       drawChart(lastRes);
@@ -470,9 +477,44 @@ function setupChartInteractions() {
   let rightWheelAt = 0; // suppress the stray context menu right after a right-hold wheel
   cv.addEventListener('contextmenu', (e) => { if (performance.now() - rightWheelAt < 700) e.preventDefault(); });
   // Chromium strips held-button state from wheel events (buttons=0 even mid-drag), so
-  // right-hold is tracked from mousedown/mouseup instead of e.buttons
+  // right-hold/left-hold are tracked from mousedown/mouseup instead of e.buttons
   let rightDown = false;
-  window.__pwBtn = { get right() { return rightDown; } };
+  let leftDown = false;
+  window.__pwBtn = { get right() { return rightDown; }, get left() { return leftDown; } };
+  // magnifier scope: both buttons held = loupe follows the cursor, wheel scales zoom
+  let mag = 4;
+  const loupe = document.createElement('canvas');
+  loupe.className = 'loupe';
+  const LR = 90;
+  loupe.width = LR * 2; loupe.height = LR * 2;
+  loupe.style.cssText = 'position:absolute;pointer-events:none;border:1px solid #222;border-radius:50%;display:none;z-index:12;background:#000;';
+  cv.parentElement.appendChild(loupe);
+  function drawLoupe(e) {
+    const rect = cv.getBoundingClientRect();
+    const wr = cv.parentElement.getBoundingClientRect();
+    const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+    loupe.style.left = Math.round(e.clientX - wr.left - LR) + 'px';
+    loupe.style.top = Math.round(e.clientY - wr.top - LR) + 'px';
+    loupe.style.display = 'block';
+    const g2 = loupe.getContext('2d');
+    g2.setTransform(1, 0, 0, 1, 0, 0);
+    g2.fillStyle = '#000'; g2.fillRect(0, 0, LR * 2, LR * 2);
+    g2.save();
+    g2.beginPath(); g2.arc(LR, LR, LR - 1, 0, Math.PI * 2); g2.clip();
+    const srcR = Math.max(6, LR / mag);
+    const sx = Math.max(0, Math.min(cv.width - 2, cx - srcR));
+    const sy = Math.max(0, Math.min(cv.height - 2, cy - srcR));
+    const sw = Math.max(2, Math.min(srcR * 2, cv.width - sx));
+    const sh = Math.max(2, Math.min(srcR * 2, cv.height - sy));
+    g2.imageSmoothingEnabled = false;
+    g2.drawImage(cv, sx, sy, sw, sh, 0, 0, LR * 2, LR * 2);
+    g2.restore();
+    g2.strokeStyle = '#888'; g2.lineWidth = 1;
+    g2.beginPath(); g2.moveTo(LR - 12, LR); g2.lineTo(LR + 12, LR);
+    g2.moveTo(LR, LR - 12); g2.lineTo(LR, LR + 12); g2.stroke();
+    g2.fillStyle = '#32CD32'; g2.fillRect(LR - 1, LR - 1, 3, 3);
+  }
+  function hideLoupe() { loupe.style.display = 'none'; }
 
   // cursor hints like TV: ns-resize over price axis, ew-resize over time axis
   cv.addEventListener('mousemove', (e) => {
@@ -514,6 +556,7 @@ function setupChartInteractions() {
   let drag = null;
   cv.addEventListener('mousedown', (e) => {
     if (e.button === 2) { rightDown = true; return; }
+    if (e.button === 0) leftDown = true;
     if (!lastRes) return;
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
@@ -532,6 +575,7 @@ function setupChartInteractions() {
     e.preventDefault();
   });
   window.addEventListener('mousemove', (e) => {
+    if (leftDown && rightDown) { drawLoupe(e); return; } // scoping: freeze pan, move the loupe
     if (!drag || !lastRes) return;
     const n = nOf();
     const rect = cv.getBoundingClientRect();
@@ -570,7 +614,7 @@ function setupChartInteractions() {
       drawChart(lastRes);
     }
   });
-  window.addEventListener('mouseup', (e) => { if (e.button === 2) rightDown = false; drag = null; if (cv) cv.style.cursor = ''; });
+  window.addEventListener('mouseup', (e) => { if (e.button === 2) rightDown = false; if (e.button === 0) leftDown = false; if (!(leftDown && rightDown)) hideLoupe(); drag = null; if (cv) cv.style.cursor = ''; });
   cv.addEventListener('dblclick', () => {
     if (!lastRes) return;
     viewFit(lastRes.c.length);
@@ -720,6 +764,60 @@ function renderTrades(trades) {
   }
   t.innerHTML = html;
 }
+
+/* ---------- wheel edits values in numeric inputs (Interaction canon) ----------
+   Hover a number box and scroll: up = increase, down = decrease. Shift = x10,
+   Ctrl/Alt = x0.1. Price-kind inputs (data-kind="price") start from the loaded
+   ticker's last close when the box is empty. Generic inputs step smartly by
+   order of magnitude; empty generic boxes stay empty (no context to start from). */
+function currentTickerPrice() {
+  const c = lastRes && lastRes.c;
+  return c && c.length ? Number(c[c.length - 1]) : NaN;
+}
+function installWheelEdit() {
+  document.addEventListener('wheel', (e) => {
+    const t = e.target;
+    if (!t || t.tagName !== 'INPUT' || t.readOnly || t.disabled) return;
+    if (t.type === 'checkbox' || t.type === 'radio' || t.type === 'range' || t.type === 'file' || t.type === 'submit' || t.type === 'button') return;
+    const kind = t.dataset && t.dataset.kind;
+    const looksNum = t.type === 'number' || t.inputMode === 'decimal' || kind != null || /^\s*-?\d+(\.\d+)?\s*$/.test(String(t.value || ''));
+    if (!looksNum) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let cur = parseFloat(String(t.value || '').trim());
+    let empty = !(cur === cur);
+    if (empty && kind === 'price') {
+      const live = currentTickerPrice();
+      if (!(live > 0)) return;
+      t.value = live.toFixed(live >= 100 ? 2 : 4);
+      t.dispatchEvent(new Event('input', { bubbles: true }));
+      t.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if (empty && kind === 'pct') {
+      t.value = '0.5';               // first scroll lands on the start value, next scrolls step
+      t.dispatchEvent(new Event('input', { bubbles: true }));
+      t.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if (empty) return;                                   // generic box: no start value context
+    let step = kind === 'pct' ? 0.05
+      : kind === 'price' ? Math.max(cur * 0.001, 0.01)
+      : Math.max(Math.pow(10, Math.floor(Math.log10(Math.abs(cur) || 1))) / 10, t.type === 'number' ? 1 : 0);
+    if (!(step > 0)) step = 1;
+    const mult = e.shiftKey ? 10 : (e.ctrlKey || e.altKey) ? 0.1 : 1;
+    let nv = cur + (e.deltaY < 0 ? step : -step) * mult;
+    if (kind === 'price') nv = Number(nv.toFixed(cur >= 100 ? 2 : 4));
+    else {
+      const dec = step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 4;
+      nv = Number(nv.toFixed(dec));
+    }
+    t.value = String(nv);
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    t.dispatchEvent(new Event('change', { bubbles: true }));
+  }, { capture: true, passive: false });
+}
+installWheelEdit();
 
 /* ---------- compile on type (debounced quick compile for errors) ---------- */
 let compileTimer = null;
