@@ -422,8 +422,10 @@ function setupChartInteractions() {
     }
     const frac = Math.min(1, Math.max(0, (ax - 1) / chartCW()));
     const factor = Math.pow(1.25, e.deltaY / 100);
-    const pinned = view.end >= n - 1.5;
-    zoomTime(frac, factor, pinned);
+    // NinjaTrader zoom feel: ALWAYS anchor at the exact pointer position (bar under the
+    // cursor never moves when wheeling). No right-edge pinning - use the LATEST pill to
+    // snap back to now, or hover the right edge while zooming.
+    zoomTime(frac, factor, false);
   }, { passive: false });
 
   // cursor hints like TV: ns-resize over price axis, ew-resize over time axis
