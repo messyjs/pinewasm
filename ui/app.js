@@ -98,7 +98,9 @@ function clampView(n) {
   if (view.end - view.start < minSpan) view.end = Math.min(n - 1, view.start + minSpan);
   if (view.end - view.start > n - 1) { view.start = 0; view.end = n - 1; }
   if (view.start < 0) { view.end -= view.start; view.start = 0; }
-  if (view.end > n - 1) { view.start -= view.end - (n - 1); view.end = n - 1; }
+  // TV overscroll: allow dragging up to 25% of the viewport past the last bar (blank space right)
+  const over = Math.floor(Math.max(0, view.end - view.start) * 0.25);
+  if (view.end > n - 1 + over) { view.start -= view.end - (n - 1 + over); view.end = n - 1 + over; }
   if (view.start < 0) view.start = 0;
 }
 
@@ -373,7 +375,7 @@ function drawChart(res, forceDraw) {
     }
   }
   const gl = $('goLive');
-  if (gl) gl.classList.toggle('hidden', view.end >= n - 1.5);
+  if (gl) gl.classList.toggle('hidden', view.end <= n - 0.5); // pill shows when overscrolled past latest
 }
 let hoverXY = null;
 
@@ -426,6 +428,7 @@ function setupChartInteractions() {
 
   // cursor hints like TV: ns-resize over price axis, ew-resize over time axis
   cv.addEventListener('mousemove', (e) => {
+    if (drag) return;
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     if (x > cv.width - 64 && y <= cv.height - 18) cv.style.cursor = 'ns-resize';
@@ -475,7 +478,8 @@ function setupChartInteractions() {
         lo0: lastPM.yLo, hi0: lastPM.yHi };
     }
     else if (y > cv.height - 18 && x <= cv.width - 64) drag = { kind: 'time', x0: x, s0: view.end - view.start, frac: Math.min(1, Math.max(0, (x - 1) / chartCW())) };
-    else drag = { kind: 'pan', x0: x, s0: view.start, e0: view.end };
+    else drag = { kind: 'pan', x0: x, y0: y, s0: view.start, e0: view.end };
+    if (drag.kind === 'pan') cv.style.cursor = 'grabbing';
     e.preventDefault();
   });
   window.addEventListener('mousemove', (e) => {
@@ -488,6 +492,16 @@ function setupChartInteractions() {
       view.start = drag.s0 + dBar;
       view.end = drag.e0 + dBar;
       clampView(n);
+      // vertical pan: dragging up/down moves the price scale with you (TV behavior)
+      if (lastPM && Math.abs(y - drag.y0) > 2) {
+        if (!drag.vm) {
+          drag.vm = { lo: lastPM.yLo, hi: lastPM.yHi }; // freeze the scale on first vertical move
+          manualScale = { lo: drag.vm.lo, hi: drag.vm.hi };
+        }
+        const H2c = Math.max(1, lastPM.candleH - lastPM.padT - 4);
+        const dP = ((y - drag.y0) / H2c) * (drag.vm.hi - drag.vm.lo);
+        manualScale = { lo: drag.vm.lo + dP, hi: drag.vm.hi + dP };
+      }
       drawChart(lastRes);
     } else if (drag.kind === 'price') {
       // TV feel: price under the grab point follows the cursor; drag down = zoom out
@@ -507,7 +521,7 @@ function setupChartInteractions() {
       drawChart(lastRes);
     }
   });
-  window.addEventListener('mouseup', () => { drag = null; });
+  window.addEventListener('mouseup', () => { drag = null; if (cv) cv.style.cursor = ''; });
   cv.addEventListener('dblclick', () => {
     if (!lastRes) return;
     viewFit(lastRes.c.length);
@@ -585,7 +599,10 @@ async function doRun() {
     lastRes = res;
     priceZoom = 1;
     manualScale = null;
-    viewFit(res.c.length);
+    // TV-style open: zoomed in on the most recent bars, right edge pinned at latest
+    const K = Math.min(Math.max(Math.round(res.c.length * 0.12), 60), 600);
+    view.end = res.c.length - 1;
+    view.start = Math.max(0, res.c.length - 1 - K);
     lastCanvasKey = ''; // force redraw after new run
     renderStats(res);
     drawChart(res);
