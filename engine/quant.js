@@ -68,6 +68,17 @@ function parseGoal(text) {
     if (!hasTarget) { g.primary = 'net'; }
     return g;
   }
+  // GENERATE mode: build a NEW script from a description (PineQuantStudio parity)
+  if (g.intent === 'goal') {
+    const genWord = /(?:^|\s)(?:generate|build|create|write|draft)\b/.test(t);
+    const wantsScript = /\b(strategy|indicator|script|pine|system|bot)\b/.test(t);
+    if (genWord && (wantsScript || /generate\b/.test(t))) {
+      g.intent = 'generate'; g.gen = text;
+      const gp = t.match(/conservative|balanced|aggressive|scalp(?:er)?|swing/);
+      if (gp) g.preset = gp[0] === 'scalp' ? 'scalper' : gp[0];
+      return g;
+    }
+  }
   const hasTarget = g.ddMax != null || g.minTrades != null || g.minWr != null || g.minPf != null || g.minNet != null || g.fixedQty != null || g.maxPos != null;
   if (g.intent === 'goal' && !hasTarget) g.intent = 'unknown';
   return g;

@@ -108,7 +108,7 @@ let priceZoom = 1; // vertical scale (TV-style price axis drag)
 let lastPM = null;       // last drawn price mapping {yLo, yHi, padT, candleH}
 let manualScale = null;  // TV behavior: axis wheel/drag fixes the price scale until dblclick-fit / new run
 
-function drawChart(res) {
+function drawChart(res, forceDraw) {
   if (!res || !res.c.length) return;
   const cv = $('chart');
   const wrap = cv.parentElement;
@@ -119,7 +119,7 @@ function drawChart(res) {
   const n = res.c.length;
   clampView(n);
   const key = [W, H, view.start.toFixed(3), view.end.toFixed(3), res.trades.length, res.plots.length, res.nbars].join('|');
-  if (key === lastCanvasKey) return;
+  if (!forceDraw && key === lastCanvasKey) return;
   lastCanvasKey = key;
   cv.width = W; cv.height = H;
   cv.style.height = H + 'px';
@@ -167,19 +167,42 @@ function drawChart(res) {
   lastPM = { yLo, yHi, padT, candleH };
   const Y = price => padT + (1 - (price - yLo) / (yHi - yLo)) * (candleH - padT - 4);
   const X = bar => ((bar - view.start) / span) * (cw - 2) + 1;
-  // grid
+  const vis0 = (i1 - i0) + 1;
+  const bw = Math.max(1, (cw / Math.max(1, vis0)) * 0.6);
+  // price scale: 1-2-5 nice ticks (TV look)
   ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
   ctx.font = '12px JetBrains Mono';
-  for (let g = 0; g <= 4; g++) {
-    const py = padT + g * (candleH - padT - 4) / 4;
+  const rawStep = Math.max(1e-12, yHi - yLo) / 7;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const pStep = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+  const dec = Math.max(0, Math.min(6, -Math.floor(Math.log10(pStep))));
+  for (let tp = Math.ceil(yLo / pStep) * pStep; tp <= yHi; tp += pStep) {
+    if (tp !== tp) break;
+    const py = Y(tp);
+    if (py < padT - 1 || py > candleH - 1) continue;
     ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(cw, py); ctx.stroke();
     ctx.fillStyle = '#555';
-    const price = yLo + (1 - (py - padT) / (candleH - padT - 4)) * (yHi - yLo);
-    ctx.fillText(price.toFixed(2), cw + 4, py + 4);
+    ctx.fillText(tp.toFixed(dec), cw + 4, py + 4);
+  }
+  // axis frame (TV: separator between chart and price scale)
+  ctx.strokeStyle = '#222';
+  ctx.beginPath(); ctx.moveTo(cw + 0.5, 0); ctx.lineTo(cw + 0.5, H); ctx.stroke();
+  // volume strip: dim bars along the bottom of the price pane
+  let vmax = 0;
+  if (res.v) for (let k = i0; k <= i1; k++) { const v2 = Number(res.v[k]); if (v2 === v2 && v2 > vmax) vmax = v2; }
+  if (vmax > 0) {
+    const volH = Math.round((candleH - padT - 4) * 0.16);
+    for (let k = i0; k <= i1; k++) {
+      const v2 = Number(res.v[k]); if (v2 !== v2 || v2 <= 0) continue;
+      const x = X(k); if (x < -bw || x > cw) continue;
+      const hh = Math.max(1, (v2 / vmax) * volH);
+      ctx.fillStyle = res.c[k] >= res.o[k] ? 'rgba(50,205,50,0.30)' : 'rgba(206,32,41,0.30)';
+      ctx.fillRect(x - bw / 2, candleH - hh, bw, hh);
+    }
   }
   // candles (visible only)
   const vis = (i1 - i0) + 1;
-  const bw = Math.max(1, (cw / Math.max(1, vis)) * 0.6);
   for (let k = i0; k <= i1; k++) {
     const x = X(k);
     if (x < -bw || x > cw + bw) continue;
@@ -289,9 +312,70 @@ function drawChart(res) {
     const label = `${d.getMonth() + 1}/${d.getDate()}`;
     ctx.fillText(label, X(k) - 12, H - 3);
   }
+  // last price: dotted line + axis tag (green if last bar closed up, red if down)
+  if (n > 0) {
+    const pb = Number(res.c[n - 1]);
+    if (pb === pb && pb >= yLo && pb <= yHi) {
+      const py = Y(pb);
+      const lastUp = pb >= Number(res.o[n - 1]);
+      if (py >= padT && py <= candleH - 1) {
+        ctx.strokeStyle = '#333';
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(cw, py); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle = lastUp ? '#32CD32' : '#CE2029';
+      ctx.fillRect(cw + 1, Math.min(candleH - 17, Math.max(0, py - 8)), padR - 2, 16);
+      ctx.fillStyle = '#000';
+      ctx.fillText(pb.toFixed(dec), cw + 4, Math.min(candleH - 17, Math.max(0, py - 8)) + 12);
+    }
+  }
+  // crosshair + OHLCV legend (chart body hover, snapped to the bar under cursor)
+  if (forceDraw && hoverXY) {
+    const hx = hoverXY.x, hy = hoverXY.y;
+    if (hx >= 0 && hx <= cw && hy >= padT && hy <= candleH - 2) {
+      const H2c = Math.max(1, candleH - padT - 4);
+      const kb = Math.min(n - 1, Math.max(0, Math.round(view.start + (hx - 1) / (cw - 2) * span)));
+      const cxp = X(kb);
+      ctx.strokeStyle = '#555';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(cxp, 0); ctx.lineTo(cxp, candleH - 2); ctx.stroke();
+      if (hy >= padT) {
+        ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(cw, hy); ctx.stroke();
+        const pcur = yLo + (1 - (hy - padT) / H2c) * (yHi - yLo);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#1A1A1A';
+        ctx.fillRect(cw + 1, Math.min(candleH - 17, Math.max(0, hy - 8)), padR - 2, 16);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(pcur.toFixed(dec), cw + 4, Math.min(candleH - 17, Math.max(0, hy - 8)) + 12);
+      }
+      ctx.setLineDash([]);
+      const v1 = Number(res.v ? res.v[kb] : NaN);
+      const chg = kb > 0 && Number(res.c[kb - 1]) ? ((res.c[kb] / res.c[kb - 1] - 1) * 100).toFixed(2) + '%' : '-';
+      const fv = v1 === v1 ? (v1 >= 1e9 ? (v1 / 1e9).toFixed(1) + 'B' : v1 >= 1e6 ? (v1 / 1e6).toFixed(1) + 'M' : v1 >= 1e3 ? (v1 / 1e3).toFixed(1) + 'K' : v1.toFixed(0)) : '0';
+      const leg = `O ${Number(res.o[kb]).toFixed(dec)}   H ${Number(res.h[kb]).toFixed(dec)}   L ${Number(res.l[kb]).toFixed(dec)}   C ${Number(res.c[kb]).toFixed(dec)}   ${chg}   V ${fv}`;
+      const lw = ctx.measureText(leg).width + 16;
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(2, 2, lw, 20);
+      ctx.strokeStyle = '#222';
+      ctx.strokeRect(2.5, 2.5, lw, 20);
+      const upc = Number(res.c[kb]) >= Number(res.o[kb]);
+      ctx.fillStyle = upc ? '#32CD32' : '#CE2029';
+      ctx.fillText(leg, 10, 16);
+      // snap date tag on the time axis
+      const dd = new Date(res.t[kb] * 1000);
+      const dtxt = `${dd.getMonth() + 1}/${dd.getDate()} ${String(dd.getHours()).padStart(2, '0')}:${String(dd.getMinutes()).padStart(2, '0')}`;
+      const dw = ctx.measureText(dtxt).width + 12;
+      ctx.fillStyle = '#1A1A1A';
+      ctx.fillRect(Math.min(Math.max(0, cxp - dw / 2), cw - dw), H - 16, dw, 14);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(dtxt, Math.min(Math.max(0, cxp - dw / 2), cw - dw) + 6, H - 5);
+    }
+  }
   const gl = $('goLive');
   if (gl) gl.classList.toggle('hidden', view.end >= n - 1.5);
 }
+let hoverXY = null;
 
 /* zoom + pan interactions (TradingView-style) */
 function setupChartInteractions() {
@@ -347,6 +431,19 @@ function setupChartInteractions() {
     if (x > cv.width - 64 && y <= cv.height - 18) cv.style.cursor = 'ns-resize';
     else if (y > cv.height - 18 && x <= cv.width - 64) cv.style.cursor = 'ew-resize';
     else cv.style.cursor = '';
+    // crosshair + OHLCV legend on chart-body hover
+    if (!drag && lastRes) {
+      if (x <= cv.width - 64 && y <= cv.height - 18) {
+        hoverXY = { x, y };
+        drawChart(lastRes, true);
+      } else if (hoverXY) {
+        hoverXY = null;
+        drawChart(lastRes, true);
+      }
+    }
+  });
+  cv.addEventListener('mouseleave', () => {
+    if (hoverXY) { hoverXY = null; if (lastRes && !drag) drawChart(lastRes, true); }
   });
 
   // cursor-anchored price-scale zoom (TV wheel-on-axis feel)
@@ -356,8 +453,8 @@ function setupChartInteractions() {
     const r = Math.min(1, Math.max(0, (yPx - lastPM.padT) / H2));
     const pA = lastPM.yLo + (1 - r) * (lastPM.yHi - lastPM.yLo); // price under cursor
     const Rold = Math.max(1e-9, lastPM.yHi - lastPM.yLo);
-    let R = Rold / f;
-    R = Math.min(Math.max(R, 1e-9), Rold * 20); // sane bounds per gesture
+    let R = Rold * f; // wheel down = zoom out (same direction as the time axis wheel)
+    R = Math.min(Math.max(R, Rold / 20), Rold * 20); // sane bounds per gesture
     manualScale = { lo: pA - (1 - r) * R, hi: pA - (1 - r) * R + R };
     lastCanvasKey = '';
     drawChart(lastRes);
@@ -783,6 +880,21 @@ $('btnCsv').onclick = async () => {
     showPage('compiler'); doRun();
   }
 };
+async function fetchYahooData() {
+  const symbol = ($('yhSymbol').value || 'NQ=F').trim();
+  const interval = $('yhTf').value || '15m';
+  setPill('FETCHING ' + symbol, 'busy');
+  const res = await window.pw.fetchYahoo({ symbol, interval });
+  if (!res.ok) { logErrors({ errs: res.errs }); setPill('ERRORS', 'err'); return; }
+  dataSpec = { source: 'yahoo', data: res.data };
+  const cur = res.meta && res.meta.currency ? ' ' + res.meta.currency : '';
+  $('dataLabel').textContent = `DATA: ${res.meta && res.meta.exchange ? res.meta.exchange + ' ' : ''}${res.meta && res.meta.symbol ? res.meta.symbol : symbol}${cur} ${interval} ${res.data.C.length} BARS`;
+  showPage('compiler'); doRun();
+}
+$('btnYahoo').onclick = fetchYahooData;
+document.querySelectorAll('.chip[data-yh]').forEach(c => {
+  c.onclick = () => { $('yhSymbol').value = c.dataset.yh; fetchYahooData(); };
+});
 $('btnOkx').onclick = async () => {
   const symbol = $('okxSymbol').value || 'BTC-USDT-SWAP';
   const bar = $('okxTf').value;

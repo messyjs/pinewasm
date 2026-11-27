@@ -199,4 +199,89 @@ async function runLoop(baseSrc, data, goal, opts) {
   return out;
 }
 
-module.exports = { runLoop, scoreOf, violationOf, extractSource, llmChat, reportForLLM };
+module.exports = { runLoop, scoreOf, violationOf, extractSource, llmChat, reportForLLM, generateImpl };
+
+/* --------- GENERATE: build a fresh strategy from a description (PineQuantStudio parity) --------- */
+const GEN_PRESETS = {
+  conservative: { qty: 10, sl: 2.0, tp: 4.0, note: 'few high-quality signals, wide stops' },
+  balanced:     { qty: 15, sl: 1.5, tp: 3.0, note: 'moderate signal frequency' },
+  aggressive:   { qty: 25, sl: 1.0, tp: 2.5, note: 'more signals, tighter stops' },
+  scalper:      { qty: 30, sl: 0.6, tp: 1.2, note: 'very tight stops, quick exits' },
+  swing:        { qty: 15, sl: 3.0, tp: 6.0, note: 'wide stops, held longer' },
+};
+
+const GEN_RULES = [
+  'PineWASM compiler subset (STRICT - anything outside this list does not compile):',
+  '- Header: //@version=5. strategy("Name", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=<qty>, commission_type=strategy.commission.percent, commission_value=0.05, capital=100000)',
+  '- Builtins: open high low close volume time hl2 hlc3 ohlc4 bar_index; ta.sma ta.ema ta.rma ta.wma ta.rsi ta.tr ta.atr ta.stdev ta.highest ta.lowest ta.change ta.mom ta.cum ta.crossover ta.crossunder ta.cross ta.valuewhen',
+  '- math.abs floor ceil sqrt round(x,p) max min sum avg pow log exp sign; na(x) nz(x,y) int(x) float(x); input.int input.float input.bool',
+  '- plot(color=...) plotshape(shape=...) hline(); strategy.entry strategy.close strategy.close_all strategy.exit(stop=, limit=); strategy.position_size strategy.position_avg_price',
+  '- var / := reassignment, if/else, for loops, single-line user functions, ternary ?:, and or not, history operator [] on series ids',
+  '- FORBIDDEN (does not compile): input.string with logic branching on it, string comparisons, request.security, arrays, matrices, tables, labels, alerts, strategy.order, color.new, switch, while, type, math.sum(series, len), ta.macd/bb/supertrend/vwap/stoch/cci/mfi/obv/dmi/barssince/pivothigh/pivotlow',
+  '- Exit plan: every entry gets a paired strategy.exit with BOTH stop= (stop loss) and limit= (take profit) offsets from your own entry reference price. Keep exit ids unique per entry id.',
+  '- Output: return the FULL Pine source in ONE fenced code block, no prose, no comments about unsupported features.',
+].join('\n');
+
+async function generateImpl(data, goal, opts) {
+  opts = opts || {};
+  const maxRounds = Math.min(Math.max(opts.maxRounds || 5, 1), 8);
+  const minTrades = Math.min(Math.max(opts.minTrades || 10, 1), 100);
+  const presetName = (goal.preset || 'balanced').toLowerCase();
+  const P = GEN_PRESETS[presetName] || GEN_PRESETS.balanced;
+  const out = { rounds: [], best: null, error: null };
+  const sys = GEN_RULES + '\n\nPRESET "' + presetName + '": default_qty_value=' + P.qty + ' (% of equity), stop loss input default ' + P.sl + '%, take profit input default ' + P.tp + '%. Flavor: ' + P.note + '.' +
+    ' Declare these as input.float defaults (titles "Stop Loss %", "Take Profit %") and USE them in the strategy.exit calls.';
+  const user0 = [
+    goal.gen ? 'DESCRIPTION: ' + goal.gen : 'DESCRIPTION: a balanced trend strategy',
+    goal.ddMax != null ? 'CONSTRAINT: max drawdown <= ' + goal.ddMax + '% (design the exits accordingly)' : '',
+    'Bars will be ~' + (data ? data.c.length : 3000) + ' bars of continuous OHLCV.',
+  ].filter(Boolean).join('\n');
+  const msgs = [{ role: 'system', content: sys }, { role: 'user', content: user0 }];
+  const t0 = Date.now();
+  if (!opts.deadline) opts.deadline = 240000;
+  for (let i = 1; i <= maxRounds; i++) {
+    if (Date.now() - t0 > opts.deadline) {
+      out.error = out.error || 'deadline (' + Math.round(opts.deadline / 1000) + 's) reached';
+      break;
+    }
+    let raw;
+    try { raw = await llmChat(msgs, 180000); }
+    catch (e) { out.error = 'llm: ' + String(e.message || e).slice(0, 140); return out; }
+    const src = extractSource(raw);
+    if (!/\bstrategy\s*\(/.test(src)) {
+      out.rounds.push({ i, ok: false, err: 'no strategy() in model output' });
+      msgs.push({ role: 'user', content: 'Your output was not a strategy() source. Return the FULL Pine strategy source in ONE fenced block.' });
+      continue;
+    }
+    const comp = await rt.compileScript(src);
+    if (!comp.ok) {
+      const errs = (comp.errs || []).map(e => 'L' + e.line + ': ' + e.msg).slice(0, 6).join(' ; ');
+      out.rounds.push({ i, ok: false, err: errs });
+      msgs.push({ role: 'user', content: 'YOUR SCRIPT FAILED TO COMPILE in the PineWASM engine. Errors: ' + errs +
+        ' - fix them and return the FULL corrected Pine source in ONE fenced block. Remember: only the supported builtins from the rules.' });
+      continue;
+    }
+    const run = rt.runBacktest(comp, data);
+    const st = run.stats;
+    if (!st.trades) {
+      out.rounds.push({ i, ok: false, err: 'compiled but 0 trades' });
+      msgs.push({ role: 'user', content: 'Your strategy compiled fine but produced 0 trades on this data. Loosen the entry conditions (e.g. wider rsi band, shorter lookback) and return the FULL corrected source in ONE fenced block.' });
+      continue;
+    }
+    if (!out.best || st.trades > out.best.stats.trades) out.fallback = { src, stats: st, score: scoreOf(st), preset: presetName };
+    if (st.trades < minTrades) {
+      out.rounds.push({ i, ok: false, err: 'only ' + st.trades + ' trades (need >= ' + minTrades + ')' });
+      msgs.push({ role: 'user', content: 'Your strategy compiled but produced only ' + st.trades + ' trades in ' + data.c.length + ' bars - far too few to be useful. Loosen the entry conditions (wider bands, shorter lookback, more signal types OR-combined together) while keeping the risk profile. Return the FULL corrected source in ONE fenced block.' });
+      continue;
+    }
+    out.best = { src, stats: st, score: scoreOf(st), preset: presetName };
+    out.rounds.push({ i, ok: true, trades: st.trades });
+    out.ms = Date.now() - t0;
+    return out;
+  }
+  if (!out.best && out.fallback) out.best = out.fallback; // accept a thin-but-valid strategy as fallback
+  if (out.best) { out.ms = Date.now() - t0; return out; }
+  out.error = out.error || ('no compiling+trading version after ' + maxRounds + ' rounds (last: ' + (out.rounds.length ? out.rounds[out.rounds.length - 1].err : '?') + ')');
+  out.ms = Date.now() - t0;
+  return out;
+}

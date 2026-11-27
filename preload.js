@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld('pw', {
   sweep: (payload) => ipcRenderer.invoke('sweep', payload),
   luxRun,
   fetchKlines: (p) => ipcRenderer.invoke('fetch-klines', p),
+  fetchYahoo: (p) => ipcRenderer.invoke('fetch-yahoo', p),
   genbot: (p) => ipcRenderer.invoke('genbot', p),
   openPath: (p) => ipcRenderer.invoke('open-path', p),
   exportWasm: (src) => ipcRenderer.invoke('export-wasm', src),

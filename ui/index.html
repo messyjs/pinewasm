@@ -76,6 +76,7 @@
               <button class="chip" data-msg="max drawdown 5%">MAX DD 5%</button>
               <button class="chip" data-msg="max drawdown 10% with at least 20 trades">MAX DD 10% / 20 TRADES</button>
               <button class="chip" data-msg="max drawdown 8% with 3 concurrent positions">3 CONCURRENT POS</button>
+              <button class="chip" data-msg="GENERATE: a rsi mean reversion strategy with tight risk, swing preset">GENERATE: RSI STRATEGY</button>
               <button class="chip" data-msg="loop: rewrite the strategy to cut max drawdown to 10% and raise net">LLM LOOP: DD 10%</button>
               <button class="chip" data-msg="loop: make the strategy better">LLM LOOP: FREE</button>
               <button class="chip" id="luxChip">CROSS-CHECK: LUX ENGINE</button>
@@ -142,6 +143,31 @@
           <button id="btnOkx" class="btn btn-green">FETCH</button>
         </div>
         <div class="bot-meta">No API key needed. Loads into the compiler.</div>
+      </div>
+      <div class="card">
+        <div class="ph-label">YAHOO FINANCE - ANY TICKER (stocks, indices, futures, crypto)</div>
+        <div class="data-row">
+          <input id="yhSymbol" value="NQ=F" placeholder="NQ=F, ES=F, SPY, AAPL, BTC-USD">
+          <select id="yhTf">
+            <option>1m</option><option>5m</option><option selected>15m</option><option>1h</option><option>1d</option>
+          </select>
+          <button id="btnYahoo" class="btn btn-green">FETCH</button>
+        </div>
+        <div class="data-row">
+          <button class="chip" data-yh="NQ=F">NQ</button>
+          <button class="chip" data-yh="ES=F">ES</button>
+          <button class="chip" data-yh="YM=F">YM</button>
+          <button class="chip" data-yh="RTY=F">RTY</button>
+          <button class="chip" data-yh="GC=F">GC</button>
+          <button class="chip" data-yh="CL=F">CL</button>
+          <button class="chip" data-yh="SPY">SPY</button>
+          <button class="chip" data-yh="QQQ">QQQ</button>
+          <button class="chip" data-yh="AAPL">AAPL</button>
+          <button class="chip" data-yh="TSLA">TSLA</button>
+          <button class="chip" data-yh="BTC-USD">BTC</button>
+          <button class="chip" data-yh="ETH-USD">ETH</button>
+        </div>
+        <div class="bot-meta">No API key. Stocks/indices/futures/crypto from public Yahoo. Limits: 1m = 7d, 5m/15m = ~60d, 1h = 2y, 1d = 2y. Capped at 5000 bars.</div>
       </div>
       <div class="card">
         <div class="ph-label">CSV</div>

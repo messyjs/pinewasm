@@ -56,6 +56,9 @@ function loadData(spec) {
   if (spec.source === 'okx' && spec.data) {
     return dataMod.toData(spec.data.T, spec.data.O, spec.data.H, spec.data.L, spec.data.C, spec.data.V);
   }
+  if (spec.source === 'yahoo' && spec.data) {
+    return dataMod.toData(spec.data.T, spec.data.O, spec.data.H, spec.data.L, spec.data.C, spec.data.V);
+  }
   return dataMod.genSample(3000);
 }
 
@@ -88,7 +91,7 @@ ipcMain.handle('run', async (_e, payload) => {
       meta: comp.meta, inputs: comp.inputs,
       runMs: r.runMs, nbars: r.nbars,
       t: Array.from(data.t), o: Array.from(data.o), h: Array.from(data.h),
-      l: Array.from(data.l), c: Array.from(data.c),
+      l: Array.from(data.l), c: Array.from(data.c), v: Array.from(data.v),
     };
   } catch (ex) { return { ok: false, errs: [{ line: 0, msg: 'run: ' + ex.message }] }; }
 });
@@ -103,6 +106,19 @@ ipcMain.handle('sweep', async (_e, payload) => {
     return { ok: true, rows };
   } catch (ex) { return { ok: false, errs: [{ line: 0, msg: 'sweep: ' + ex.message }] }; }
 });
+
+async function quantGenerateImpl(data, Q) {
+  const loop = require('./engine/loop');
+  const res = await loop.generateImpl(data, Q, { maxRounds: 5 });
+  if (!res.best) {
+    return { reply: 'GENERATE failed: ' + (res.error || 'unknown') + ' Try a more concrete description, or name a preset (conservative / balanced / aggressive / scalper / swing).', rounds: res.rounds };
+  }
+  const s = res.best.stats;
+  let reply = `GENERATE (${res.best.preset}) - compiled + backtested on ${data.c.length} bars\n` +
+    `net ${Number(s.netProfitPct).toFixed(2)}% | ${s.trades} trades | pf ${Number(Math.min(Math.max(s.profitFactor, 0), 99)).toFixed(2)} | win ${(s.winRate * 100).toFixed(1)}% | dd ${Number(s.maxDDPct).toFixed(2)}%\n`;
+  reply += `Hit APPLY SOURCE to load it into the editor - then run the LLM LOOP chip to sharpen it.`;
+  return { reply, applySource: res.best.src };
+}
 
 async function quantLoopImpl(src, data, message, rounds) {
   const q = require('./engine/quant');
@@ -150,6 +166,9 @@ ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
     if (Q.intent === 'loop') {
       return await quantLoopImpl(src, data, message, 4);
     }
+    if (Q.intent === 'generate') {
+      return await quantGenerateImpl(data, Q);
+    }
     if (Q.intent === 'help' || Q.intent === 'unknown') return { reply: q.helpText(Q) };
     const baseRun = rt.runBacktest(comp, data, {}, null);
     const eq = baseRun.equity;
@@ -181,6 +200,43 @@ ipcMain.handle('quant-chat', async (_e, { src, dataSpec, message }) => {
     }
     return { reply, apply: { inputs: b.inputs, qty: b.qty, maxpos: Q.maxPos || b.maxpos || null } };
   } catch (ex) { return { reply: 'quant error: ' + ex.message }; }
+});
+
+ipcMain.handle('fetch-yahoo', async (_e, { symbol, interval, range }) => {
+  try {
+    const iv = interval || '15m';
+    // Yahoo caps intraday granularity: 1m ~7d, 5m/15m <60d, 1h <730d
+    const RANGES = { '1m': '7d', '5m': '55d', '15m': '60d', '1h': '730d', '1d': '2y', '1wk': '5y' };
+    const rg = range || RANGES[iv] || '1mo';
+    // Yahoo v8 chart needs an fc.yahoo.com A3 cookie + crumb (422 without)
+    const r0 = await fetch('https://fc.yahoo.com', { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+    const jar = (r0.headers.getSetCookie ? r0.headers.getSetCookie() : []).map(c => c.split(';')[0]).join('; ');
+    const rc = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': 'Mozilla/5.0', Cookie: jar }, signal: AbortSignal.timeout(15000) });
+    const crumb = (await rc.text()).trim();
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?crumb=${encodeURIComponent(crumb)}&interval=${iv}&range=${encodeURIComponent(rg)}&includePrePost=false&events=div%2Csplit`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json', Cookie: jar },
+      signal: AbortSignal.timeout(25000),
+    });
+    const j = await res.json();
+    const r1 = j && j.chart && j.chart.result && j.chart.result[0];
+    if (!r1 || (j.chart && j.chart.error)) return { ok: false, errs: [{ line: 0, msg: 'yahoo: ' + ((j.chart && j.chart.error && j.chart.error.description) || ('http ' + res.status + ' for ' + symbol)) }] };
+    const q = (r1.indicators && r1.indicators.quote && r1.indicators.quote[0]) || {};
+    const ts = r1.timestamp || [];
+    const o = q.open || [], h = q.high || [], l = q.low || [], c = q.close || [], v = q.volume || [];
+    const T2 = [], O2 = [], H2 = [], L2 = [], C2 = [], V2 = [];
+    for (let i = 0; i < ts.length; i++) {
+      const oo = o[i], hh = h[i], ll = l[i], cc = c[i];
+      if (oo == null || hh == null || ll == null || cc == null) continue; // yahoo nulls on halts
+      T2.push(ts[i]); O2.push(Number(oo)); H2.push(Number(hh)); L2.push(Number(ll)); C2.push(Number(cc)); V2.push(Number(v[i]) || 0);
+    }
+    if (T2.length > 5000) { // cap memory; keep the most recent bars
+      const cut = T2.length - 5000;
+      return { ok: true, data: { T: T2.slice(cut), O: O2.slice(cut), H: H2.slice(cut), L: L2.slice(cut), C: C2.slice(cut), V: V2.slice(cut) },
+        meta: { symbol: (r1.meta && r1.meta.symbol) || symbol, currency: r1.meta && r1.meta.currency, exchange: r1.meta && r1.meta.exchangeName } };
+    }
+    return { ok: true, data: { T: T2, O: O2, H: H2, L: L2, C: C2, V: V2 }, meta: { symbol: (r1.meta && r1.meta.symbol) || symbol, currency: r1.meta && r1.meta.currency, exchange: r1.meta && r1.meta.exchangeName } };
+  } catch (ex) { return { ok: false, errs: [{ line: 0, msg: 'yahoo: ' + ex.message }] }; }
 });
 
 ipcMain.handle('fetch-klines', async (_e, { symbol, bar, limit }) => {
